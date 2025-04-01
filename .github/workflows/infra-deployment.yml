@@ -75,7 +75,7 @@ jobs:
               key            = "terraform.tfstate"
               region         = "${{ steps.backend-output.outputs.REGION }}"
               dynamodb_table = "${{ steps.backend-output.outputs.DYNAMODB_TABLE }}"
-              encrypt        = true
+              encrypt        = false
             }
           }
           EOF
