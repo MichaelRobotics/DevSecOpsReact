@@ -4,6 +4,12 @@ variable "region" {
   default     = "us-west-2"
 }
 
+variable "cluster_name" {
+  description = "Name of the EKS cluster"
+  type        = string
+  default     = "DevSecOpsReact"
+}
+
 variable "vpc_cidr" {
   description = "CIDR block for VPC"
   type        = string
@@ -11,55 +17,38 @@ variable "vpc_cidr" {
 }
 
 variable "availability_zones" {
-  description = "Availability zones"
+  description = "Availability zones to use"
   type        = list(string)
-  default     = ["us-west-2a", "us-west-2b", "us-west-2c"]
+  default     = ["us-west-2a", "us-west-2b"]
 }
 
 variable "private_subnet_cidrs" {
   description = "CIDR blocks for private subnets"
   type        = list(string)
-  default     = ["10.0.1.0/24", "10.0.2.0/24", "10.0.3.0/24"]
+  default     = ["10.0.1.0/24", "10.0.2.0/24"]
 }
 
 variable "public_subnet_cidrs" {
   description = "CIDR blocks for public subnets"
   type        = list(string)
-  default     = ["10.0.4.0/24", "10.0.5.0/24", "10.0.6.0/24"]
-}
-
-variable "cluster_name" {
-  description = "Name of the EKS cluster"
-  type        = string
-  default     = "my-eks-cluster"
+  default     = ["10.0.101.0/24", "10.0.102.0/24"]
 }
 
 variable "cluster_version" {
-  description = "Kubernetes version"
+  description = "Kubernetes version for EKS cluster"
   type        = string
-  default     = "1.30"
+  default     = "1.28"
 }
 
 variable "node_groups" {
   description = "EKS node group configuration"
-  type = map(object({
-    instance_types = list(string)
-    capacity_type  = string
-    scaling_config = object({
-      desired_size = number
-      max_size     = number
-      min_size     = number
-    })
-  }))
+  type        = map(any)
   default = {
-    general = {
+    main = {
       instance_types = ["t3.medium"]
-      capacity_type  = "ON_DEMAND"
-      scaling_config = {
-        desired_size = 2
-        max_size     = 4
-        min_size     = 1
-      }
+      min_size       = 1
+      max_size       = 3
+      desired_size   = 2
     }
   }
 }

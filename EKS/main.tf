@@ -7,10 +7,10 @@ terraform {
   }
 
   backend "s3" {
-    bucket         = "myawsbucket-272028"
+    bucket         = "devsecopsreact-dev-terraform-state"
     key            = "terraform.tfstate"
     region         = "us-west-2"
-    dynamodb_table = "terraform-eks-state-locks"
+    dynamodb_table = "devsecopsreact-dev-terraform-locks"
     encrypt        = true
   }
 }
