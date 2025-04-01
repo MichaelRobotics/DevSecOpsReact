@@ -22,3 +22,22 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+ Cosign keys
+cosign-keys/
+cosign_*.key
+cosign_*.pub
+cosign.key
+cosign.pub
+*.key
+*.sig
+.cosign/
+
+# AWS and Terraform files
+.terraform/
+*.tfstate
+*.tfstate.*
+.terraformrc
+terraform.rc
+*.tfvars
+.env
