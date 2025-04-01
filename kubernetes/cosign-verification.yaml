@@ -1,0 +1,19 @@
+apiVersion: cosigned.sigstore.dev/v1alpha1
+kind: ClusterImagePolicy
+metadata:
+  name: harbor-verification-policy
+spec:
+  images:
+  - glob: "harbor.dev.yourdomain.com/your-project/your-app**"
+  authorities:
+  - keyless:
+      identities:
+      - issuer: https://token.actions.githubusercontent.com
+        subject: https://github.com/YOUR_ORG/DevSecOpsReact/.github/workflows/ci-cd.yml@refs/heads/main
+  - key:
+      data: |
+        -----BEGIN PUBLIC KEY-----
+        # Replace this with your actual public key from COSIGN_PUBLIC_KEY_DEV
+        # You can get this by running: cat ./cosign-keys/cosign_dev.pub
+        -----END PUBLIC KEY-----
+  mode: enforce 

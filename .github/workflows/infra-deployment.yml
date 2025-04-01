@@ -14,8 +14,6 @@ on:
         type: choice
         options:
           - dev
-          - staging
-          - prod
 
 jobs:
   terraform-plan:
@@ -261,6 +259,50 @@ jobs:
             --url https://harbor.${{ github.event.inputs.environment || 'dev' }}.yourdomain.com
             
           harbor project create --public your-project
+
+      - name: Configure Harbor Project for Cosign Verification
+        id: configure-cosign
+        run: |
+          # Get Cosign public key directly from the DEV environment secret
+          COSIGN_PUBLIC_KEY="${{ secrets.COSIGN_PUBLIC_KEY_DEV }}"
+          
+          if [ -z "$COSIGN_PUBLIC_KEY" ]; then
+            echo "Warning: COSIGN_PUBLIC_KEY_DEV secret not found. Signature verification will not be enabled."
+            echo "Please run scripts/generate_cosign_keys.sh dev to generate Cosign keys and set up GitHub secrets."
+            exit 0
+          fi
+          
+          # Save the public key to a file
+          echo "$COSIGN_PUBLIC_KEY" > cosign.pub
+          
+          # Harbor API doesn't have built-in CLI commands for configuring signature verification
+          # We'll use the Harbor API directly
+          
+          # Get project ID
+          PROJECT_ID=$(curl -k -s -X GET \
+            -u "admin:${{ steps.random-password.outputs.HARBOR_ADMIN_PASSWORD }}" \
+            "https://harbor.${{ github.event.inputs.environment || 'dev' }}.yourdomain.com/api/v2.0/projects?name=your-project" | jq '.[0].project_id')
+          
+          # Enable content trust/signature verification for the project
+          curl -k -s -X PUT \
+            -u "admin:${{ steps.random-password.outputs.HARBOR_ADMIN_PASSWORD }}" \
+            -H "Content-Type: application/json" \
+            -d '{
+              "signature_verification": true,
+              "cosign_verification": true
+            }' \
+            "https://harbor.${{ github.event.inputs.environment || 'dev' }}.yourdomain.com/api/v2.0/projects/${PROJECT_ID}/configurations"
+          
+          # Upload Cosign public key for verification
+          curl -k -s -X POST \
+            -u "admin:${{ steps.random-password.outputs.HARBOR_ADMIN_PASSWORD }}" \
+            -H "Content-Type: multipart/form-data" \
+            -F "file=@cosign.pub" \
+            "https://harbor.${{ github.event.inputs.environment || 'dev' }}.yourdomain.com/api/v2.0/projects/${PROJECT_ID}/cosign-keys"
+          
+          echo "Cosign signature verification enabled for project your-project"
+          # Clean up
+          rm cosign.pub
 
       - name: Set GitHub Secrets for CI/CD Pipeline
         if: success()

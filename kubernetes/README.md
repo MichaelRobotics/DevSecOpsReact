@@ -1,6 +1,6 @@
-# Kubernetes Deployment for Tic Tac Toe
+# Kubernetes Deployment with Cosign Verification
 
-This directory contains Kubernetes manifests for deploying the Tic Tac Toe application.
+This directory contains Kubernetes manifests for deploying the React application with secure image signature verification using Cosign.
 
 ## Components
 
@@ -10,33 +10,82 @@ This directory contains Kubernetes manifests for deploying the Tic Tac Toe appli
 
 ## Prerequisites
 
-- Kubernetes cluster (e.g., Minikube, EKS, GKE, AKS)
-- kubectl configured to communicate with your cluster
-- Container registry access (GitHub Container Registry in this case)
+- Kubernetes cluster (EKS) set up with the infrastructure deployment workflow
+- Harbor registry configured for Cosign verification
+- Cosign keys generated using the `scripts/generate_cosign_keys.sh` script
+- cert-manager installed in the cluster (automatically done by the infrastructure workflow)
 
-## Setup Container Registry Secret
+## Configuration Files
 
-Before deploying, you need to create a secret for pulling images from GitHub Container Registry:
+- `deployment.yaml`: Defines the application deployment with security contexts and resource limits
+- `service.yaml`: Defines the Kubernetes service for the application
+- `ingress.yaml`: Configures the ingress with TLS and security headers
+- `cosign-verification.yaml`: Configures Cosign verification policy for container images
+
+## Security Features
+
+1. **Image Signature Verification**: Images are verified using Cosign signatures
+2. **Security Contexts**: 
+   - Non-root user
+   - Read-only filesystem
+   - Dropped capabilities
+   - Seccomp profiles
+3. **TLS**: Automatic TLS certificate issuance via cert-manager
+4. **Security Headers**: HSTS, CSP, X-Frame-Options, etc.
+
+## Deployment Instructions
+
+### 1. Create Harbor Registry Credentials
+
+Replace the placeholder in `deployment.yaml` with actual Harbor credentials:
 
 ```bash
-kubectl create secret docker-registry github-container-registry \
-  --docker-server=ghcr.io \
-  --docker-username=YOUR_GITHUB_USERNAME \
-  --docker-password=YOUR_GITHUB_TOKEN \
-  --docker-email=YOUR_EMAIL
+kubectl create secret docker-registry harbor-registry-credentials \
+  --docker-server=harbor.dev.yourdomain.com \
+  --docker-username=admin \
+  --docker-password=$(aws ssm get-parameter --name "/harbor/dev/admin-password" --with-decryption | jq -r '.Parameter.Value') \
+  --docker-email=admin@yourdomain.com
 ```
 
-Replace the placeholders with your actual GitHub credentials.
+### 2. Configure Cosign Verification
 
-## Deployment
-
-To deploy the application:
+Update the Cosign public key in `cosign-verification.yaml`:
 
 ```bash
-kubectl apply -f kubernetes/deployment.yaml
-kubectl apply -f kubernetes/service.yaml
-kubectl apply -f kubernetes/ingress.yaml
+# Get the public key content
+PUBLIC_KEY=$(cat ./cosign-keys/cosign_dev.pub)
+
+# Replace the placeholder in the file
+sed -i "s|# Replace this with your actual public key from COSIGN_PUBLIC_KEY_DEV|${PUBLIC_KEY}|" kubernetes/cosign-verification.yaml
 ```
+
+### 3. Apply Kubernetes Manifests
+
+```bash
+# Apply all configurations
+kubectl apply -f kubernetes/
+
+# Verify the deployment
+kubectl get pods
+kubectl get deployments
+kubectl get ingress
+```
+
+### 4. Verify Signature Enforcement
+
+The deployment is configured to only pull and run container images that have been signed with the appropriate Cosign key.
+
+## Troubleshooting
+
+If pods are not starting due to image verification failures:
+
+1. Check that the image was properly signed during the CI/CD pipeline
+2. Verify the public key in the verification policy matches the one used for signing
+3. Ensure the Harbor project has signature verification enabled
+
+## Updating the Application
+
+Updates to the application are handled by the CI/CD pipeline, which builds, signs, and pushes new images to Harbor. Kubernetes will automatically pull the latest signed image when the deployment is updated.
 
 ## Accessing the Application
 
@@ -54,14 +103,6 @@ To scale the application:
 
 ```bash
 kubectl scale deployment tic-tac-toe --replicas=5
-```
-
-## Updating
-
-When a new image is pushed to the registry, update the deployment:
-
-```bash
-kubectl rollout restart deployment tic-tac-toe
 ```
 
 ## Monitoring

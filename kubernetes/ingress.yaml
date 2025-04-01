@@ -1,25 +1,32 @@
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
-  name: tic-tac-toe-ingress
+  name: react-app-ingress
   annotations:
     kubernetes.io/ingress.class: nginx
-    # Add additional annotations as needed for your specific ingress controller
-    # nginx.ingress.kubernetes.io/rewrite-target: /
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+    # Security headers
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/proxy-body-size: "10m"
+    nginx.ingress.kubernetes.io/configuration-snippet: |
+      more_set_headers "X-Frame-Options: DENY";
+      more_set_headers "X-Content-Type-Options: nosniff";
+      more_set_headers "X-XSS-Protection: 1; mode=block";
+      more_set_headers "Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self'";
 spec:
+  tls:
+  - hosts:
+    - app.dev.yourdomain.com
+    secretName: react-app-tls
   rules:
-  - host: tic-tac-toe.example.com  # Replace with your actual domain
+  - host: app.dev.yourdomain.com
     http:
       paths:
       - path: /
         pathType: Prefix
         backend:
           service:
-            name: tic-tac-toe
+            name: react-app
             port:
               number: 80
-  # Uncomment and configure if you want TLS
-  # tls:
-  # - hosts:
-  #   - tic-tac-toe.example.com
-  #   secretName: tic-tac-toe-tls

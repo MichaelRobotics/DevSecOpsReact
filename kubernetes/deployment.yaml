@@ -1,22 +1,30 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: tic-tac-toe
+  name: react-app
   labels:
-    app: tic-tac-toe
+    app: react-app
 spec:
   replicas: 3
   selector:
     matchLabels:
-      app: tic-tac-toe
+      app: react-app
   template:
     metadata:
       labels:
-        app: tic-tac-toe
+        app: react-app
+      annotations:
+        # Add annotation to verify image signatures
+        cosign.sigstore.dev/verification: "true"
     spec:
+      # Security context for the Pod
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
       containers:
-      - name: tic-tac-toe
-        image: ghcr.io/iam-veeramalla/devsecops-demo:sha-fb64dc2ac8cd8d79ad4a75c58326596b59eaf402
+      - name: react-app
+        image: harbor.dev.yourdomain.com/your-project/your-app:latest
         # Image will be automatically updated by CI/CD pipeline
         imagePullPolicy: Always
         ports:
@@ -28,6 +36,15 @@ spec:
           requests:
             cpu: "0.2"
             memory: "256Mi"
+        # Security context for the container
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          runAsNonRoot: true
+          runAsUser: 101  # nginx user
+          capabilities:
+            drop:
+            - ALL
         livenessProbe:
           httpGet:
             path: /
@@ -40,5 +57,33 @@ spec:
             port: 80
           initialDelaySeconds: 5
           periodSeconds: 5
+        # Add volume mount for nginx to write temp files
+        volumeMounts:
+        - name: tmp
+          mountPath: /tmp
+        - name: nginx-cache
+          mountPath: /var/cache/nginx
+        - name: nginx-run
+          mountPath: /var/run
+      # Use Harbor credentials
       imagePullSecrets:
-      - name: github-container-registry
+      - name: harbor-registry-credentials
+      # Volumes for nginx to write temp files (since we set readOnlyRootFilesystem)
+      volumes:
+      - name: tmp
+        emptyDir: {}
+      - name: nginx-cache
+        emptyDir: {}
+      - name: nginx-run
+        emptyDir: {}
+---
+# Create a ConfigMap for Harbor registry credentials
+apiVersion: v1
+kind: Secret
+metadata:
+  name: harbor-registry-credentials
+type: kubernetes.io/dockerconfigjson
+data:
+  # This will be replaced with actual credentials in a real deployment
+  # kubectl create secret docker-registry harbor-registry-credentials --docker-server=harbor.dev.yourdomain.com --docker-username=admin --docker-password=password --docker-email=admin@yourdomain.com
+  .dockerconfigjson: eyJhdXRocyI6eyJoYXJib3IuZGV2LnlvdXJkb21haW4uY29tIjp7InVzZXJuYW1lIjoiYWRtaW4iLCJwYXNzd29yZCI6InBhc3N3b3JkIiwiZW1haWwiOiJhZG1pbkB5b3VyZG9tYWluLmNvbSIsImF1dGgiOiJZV1J0YVc0NmNHRnpjM2R2Y21RPSIsImV4cGVyaW1lbnRhbCI6dHJ1ZX19fQ==
