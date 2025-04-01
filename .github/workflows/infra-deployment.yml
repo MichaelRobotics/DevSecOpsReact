@@ -1,0 +1,323 @@
+name: Infrastructure Deployment
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'EKS/**'
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to deploy to'
+        required: true
+        default: 'dev'
+        type: choice
+        options:
+          - dev
+          - staging
+          - prod
+
+jobs:
+  terraform-plan:
+    name: Terraform Plan
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./EKS
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.5.7"
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ vars.AWS_REGION || 'us-west-1' }}
+
+      - name: Terraform Init
+        id: init
+        run: terraform init
+
+      - name: Terraform Validate
+        id: validate
+        run: terraform validate
+
+      - name: Terraform Plan
+        id: plan
+        run: terraform plan -no-color -out=tfplan
+        continue-on-error: true
+
+      - name: Upload Terraform Plan
+        uses: actions/upload-artifact@v4
+        with:
+          name: terraform-plan
+          path: ./EKS/tfplan
+          retention-days: 1
+
+      - name: Check Terraform Plan Status
+        if: steps.plan.outcome == 'failure'
+        run: exit 1
+
+  terraform-apply:
+    name: Terraform Apply
+    needs: terraform-plan
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
+    defaults:
+      run:
+        working-directory: ./EKS
+    environment: ${{ github.event.inputs.environment || 'dev' }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.5.7"
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ vars.AWS_REGION || 'us-west-1' }}
+
+      - name: Terraform Init
+        id: init
+        run: terraform init
+
+      - name: Download Terraform Plan
+        uses: actions/download-artifact@v4
+        with:
+          name: terraform-plan
+          path: ./EKS/
+
+      - name: Terraform Apply
+        id: apply
+        run: terraform apply -auto-approve tfplan
+
+      - name: Export Kubeconfig
+        id: kubeconfig
+        run: |
+          aws eks update-kubeconfig --region $(terraform output -raw region) --name $(terraform output -raw cluster_name)
+          echo "KUBECONFIG=$(pwd)/kubeconfig" >> $GITHUB_ENV
+          cp ~/.kube/config $(pwd)/kubeconfig
+
+      - name: Upload Kubeconfig
+        uses: actions/upload-artifact@v4
+        with:
+          name: kubeconfig
+          path: ./EKS/kubeconfig
+          retention-days: 1
+
+  setup-harbor:
+    name: Setup Harbor Registry
+    needs: terraform-apply
+    runs-on: ubuntu-latest
+    environment: ${{ github.event.inputs.environment || 'dev' }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ vars.AWS_REGION || 'us-west-1' }}
+
+      - name: Download Kubeconfig
+        uses: actions/download-artifact@v4
+        with:
+          name: kubeconfig
+          path: ./
+
+      - name: Set KUBECONFIG environment variable
+        run: echo "KUBECONFIG=$(pwd)/kubeconfig" >> $GITHUB_ENV
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v3
+        with:
+          version: 'v3.13.1'
+
+      - name: Add Harbor Helm Repository
+        run: |
+          helm repo add harbor https://helm.goharbor.io
+          helm repo update
+
+      - name: Create Namespace
+        run: kubectl create namespace harbor --dry-run=client -o yaml | kubectl apply -f -
+
+      - name: Generate Random Admin Password
+        id: random-password
+        run: |
+          HARBOR_ADMIN_PASSWORD=$(openssl rand -base64 12)
+          echo "HARBOR_ADMIN_PASSWORD=${HARBOR_ADMIN_PASSWORD}" >> $GITHUB_OUTPUT
+          # Store in AWS SSM Parameter Store or another secret store for future reference
+          if [ -n "${{ secrets.STORE_PASSWORDS }}" ]; then
+            aws ssm put-parameter \
+              --name "/harbor/${{ github.event.inputs.environment || 'dev' }}/admin-password" \
+              --value "${HARBOR_ADMIN_PASSWORD}" \
+              --type SecureString \
+              --overwrite
+          fi
+
+      - name: Create Harbor Values File
+        run: |
+          cat > harbor-values.yaml << EOF
+          expose:
+            type: ingress
+            tls:
+              enabled: true
+              certSource: auto
+            ingress:
+              hosts:
+                core: harbor.${{ github.event.inputs.environment || 'dev' }}.yourdomain.com
+              annotations:
+                kubernetes.io/ingress.class: nginx
+                cert-manager.io/cluster-issuer: letsencrypt-prod
+          externalURL: https://harbor.${{ github.event.inputs.environment || 'dev' }}.yourdomain.com
+          harborAdminPassword: ${{ steps.random-password.outputs.HARBOR_ADMIN_PASSWORD }}
+          persistence:
+            enabled: true
+            persistentVolumeClaim:
+              registry:
+                size: 50Gi
+              database:
+                size: 5Gi
+              redis:
+                size: 1Gi
+          EOF
+
+      - name: Install cert-manager for TLS certificates
+        run: |
+          kubectl apply -f https://github.com/cert-manager/cert-manager/releases/download/v1.13.1/cert-manager.yaml
+          sleep 30  # Wait for cert-manager to initialize
+
+      - name: Create LetsEncrypt Issuer
+        run: |
+          cat > letsencrypt-issuer.yaml << EOF
+          apiVersion: cert-manager.io/v1
+          kind: ClusterIssuer
+          metadata:
+            name: letsencrypt-prod
+          spec:
+            acme:
+              server: https://acme-v02.api.letsencrypt.org/directory
+              email: admin@yourdomain.com
+              privateKeySecretRef:
+                name: letsencrypt-prod
+              solvers:
+              - http01:
+                  ingress:
+                    class: nginx
+          EOF
+          kubectl apply -f letsencrypt-issuer.yaml
+
+      - name: Install NGINX Ingress Controller
+        run: |
+          helm repo add ingress-nginx https://kubernetes.github.io/ingress-nginx
+          helm repo update
+          helm install nginx-ingress ingress-nginx/ingress-nginx \
+            --namespace ingress-nginx \
+            --create-namespace \
+            --set controller.publishService.enabled=true
+
+      - name: Install Harbor
+        run: |
+          helm install harbor harbor/harbor \
+            --namespace harbor \
+            --values harbor-values.yaml \
+            --timeout 15m
+
+      - name: Verify Harbor Deployment
+        run: |
+          kubectl get pods -n harbor
+          echo "Waiting for Harbor to be ready..."
+          kubectl wait --for=condition=Ready pods --all -n harbor --timeout=300s
+          echo "Harbor has been successfully deployed!"
+
+      - name: Create Harbor Project
+        run: |
+          # Install Harbor CLI
+          curl -LO https://github.com/goharbor/harbor-helm/releases/download/v1.11.0/harbor-cli-linux-amd64
+          chmod +x harbor-cli-linux-amd64
+          sudo mv harbor-cli-linux-amd64 /usr/local/bin/harbor
+          
+          # Wait for Harbor API to be ready
+          echo "Waiting for Harbor API to be ready..."
+          timeout 300s bash -c 'until curl -k -s https://harbor.${{ github.event.inputs.environment || 'dev' }}.yourdomain.com/api/v2.0/health | grep -q "healthy"; do sleep 5; done'
+          
+          # Login and create project
+          echo "${{ steps.random-password.outputs.HARBOR_ADMIN_PASSWORD }}" | harbor login \
+            --username admin \
+            --url https://harbor.${{ github.event.inputs.environment || 'dev' }}.yourdomain.com
+            
+          harbor project create --public your-project
+
+      - name: Set GitHub Secrets for CI/CD Pipeline
+        if: success()
+        uses: gliech/create-github-secret-action@v1
+        with:
+          name: HARBOR_URL
+          value: harbor.${{ github.event.inputs.environment || 'dev' }}.yourdomain.com
+          pa_token: ${{ secrets.TOKEN }}
+
+      - name: Set GitHub Secrets for Harbor Credentials
+        if: success()
+        uses: gliech/create-github-secret-action@v1
+        with:
+          name: HARBOR_USERNAME
+          value: admin
+          pa_token: ${{ secrets.TOKEN }}
+
+      - name: Set GitHub Secrets for Harbor Password
+        if: success()
+        uses: gliech/create-github-secret-action@v1
+        with:
+          name: HARBOR_PASSWORD
+          value: ${{ steps.random-password.outputs.HARBOR_ADMIN_PASSWORD }}
+          pa_token: ${{ secrets.TOKEN }}
+
+  update-ci-cd:
+    name: Update CI/CD Pipeline Settings
+    needs: setup-harbor
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.TOKEN }}
+
+      - name: Setup Git config
+        run: |
+          git config user.name "GitHub Actions"
+          git config user.email "actions@github.com"
+      
+      - name: Update CI/CD Pipeline with Harbor Settings
+        run: |
+          HARBOR_URL="harbor.${{ github.event.inputs.environment || 'dev' }}.yourdomain.com"
+          PROJECT_NAME="your-project"
+          APP_NAME="your-app"
+          
+          # Update the CI/CD workflow to use Harbor
+          sed -i "s/REGISTRY: .*/REGISTRY: ${HARBOR_URL}/g" .github/workflows/ci-cd.yml
+          sed -i "s/PROJECT: .*/PROJECT: ${PROJECT_NAME}/g" .github/workflows/ci-cd.yml
+          sed -i "s/IMAGE_NAME: .*/IMAGE_NAME: ${APP_NAME}/g" .github/workflows/ci-cd.yml
+          
+          # Verify changes
+          grep -A 5 "REGISTRY:" .github/workflows/ci-cd.yml
+
+      - name: Commit and push changes
+        run: |
+          git add .github/workflows/ci-cd.yml
+          git commit -m "Update CI/CD pipeline to use Harbor registry [skip ci]" || echo "No changes to commit"
+          git push 
