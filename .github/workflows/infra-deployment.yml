@@ -14,11 +14,20 @@ on:
         type: choice
         options:
           - dev
+      action:
+        description: 'Action to perform'
+        required: true
+        default: 'deploy'
+        type: choice
+        options:
+          - deploy
+          - destroy
 
 jobs:
   terraform-plan:
     name: Terraform Plan
     runs-on: ubuntu-latest
+    if: github.event.inputs.action != 'destroy'
     defaults:
       run:
         working-directory: ./EKS
@@ -66,7 +75,7 @@ jobs:
     name: Terraform Apply
     needs: terraform-plan
     runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
+    if: (github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch') && github.event.inputs.action != 'destroy'
     defaults:
       run:
         working-directory: ./EKS
@@ -115,10 +124,58 @@ jobs:
           path: ./EKS/kubeconfig
           retention-days: 1
 
+  terraform-destroy:
+    name: Terraform Destroy
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.action == 'destroy'
+    environment: ${{ github.event.inputs.environment || 'dev' }}
+    defaults:
+      run:
+        working-directory: ./EKS
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.5.7"
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ vars.AWS_REGION || 'us-west-1' }}
+
+      - name: Terraform Init
+        id: init
+        run: terraform init
+
+      - name: Terraform Destroy Plan
+        id: destroy-plan
+        run: terraform plan -destroy -out=tfdestroyplan
+
+      - name: Confirmation Wait
+        run: |
+          echo "⚠️ DANGER: About to DESTROY infrastructure for environment ${{ github.event.inputs.environment || 'dev' }} ⚠️"
+          echo "Waiting 30 seconds before proceeding with terraform destroy..."
+          sleep 30
+
+      - name: Terraform Destroy
+        run: terraform apply -auto-approve tfdestroyplan
+        
+      - name: Cleanup
+        if: always()
+        run: |
+          echo "Infrastructure destruction process completed."
+          echo "If there were any errors, please check the logs and manually verify resources."
+
   setup-harbor:
     name: Setup Harbor Registry
     needs: terraform-apply
     runs-on: ubuntu-latest
+    if: github.event.inputs.action != 'destroy'
     environment: ${{ github.event.inputs.environment || 'dev' }}
     steps:
       - name: Checkout code
