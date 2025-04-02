@@ -1,12 +1,12 @@
 name: CI/CD Pipeline
 
 on:
-#  push:
-#    branches: [ main ]
-#    paths-ignore:
-#      - 'kubernetes/deployment.yaml'  # Ignore changes to this file to prevent loops
-#  pull_request:
-#    branches: [ main ]
+  push:
+    branches: [ main ]
+    paths-ignore:
+      - 'kubernetes/deployment.yaml'  # Ignore changes to this file to prevent loops
+  pull_request:
+    branches: [ main ]
   workflow_dispatch:  # Add manual trigger capability
 
 jobs:
@@ -112,19 +112,20 @@ jobs:
             type=ref,event=branch
             latest
       
-      - name: Build Docker image
+      - name: Build and Push Docker image
+        id: docker_build
         uses: docker/build-push-action@v5
         with:
           context: .
-          push: false
+          push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          load: true  # Load image locally for SBOM and signing
       
       - name: Generate SBOM with Syft
         run: |
           curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | sh -s -- -b /usr/local/bin
-          syft ${{ env.DOCKERHUB_USERNAME }}/${{ env.IMAGE_NAME }}:sha-${{ github.sha }} -o spdx-json > sbom.json
+          FIRST_TAG=$(echo "${{ steps.meta.outputs.tags }}" | head -n 1)
+          syft "${FIRST_TAG}" -o spdx-json > sbom.json
           cat sbom.json  # Optional: View the SBOM
       
       - name: Upload SBOM as artifact
@@ -134,19 +135,35 @@ jobs:
           path: sbom.json
       
       - name: Install Cosign
-        run: |
-          curl -sLO https://github.com/sigstore/cosign/releases/latest/download/cosign-linux-amd64
-          chmod +x cosign-linux-amd64
-          sudo mv cosign-linux-amd64 /usr/local/bin/cosign
+        uses: sigstore/cosign-installer@v3.3.0
       
-      - name: Sign the image
+      - name: Sign the image with Cosign
         env:
           COSIGN_PRIVATE_KEY: ${{ secrets.COSIGN_PRIVATE_KEY }}
-          COSIGN_PASSWORD: ${{ secrets.COSIGN_PASSWORD }}
+          COSIGN_PASSWORD: ""
         run: |
           echo "$COSIGN_PRIVATE_KEY" > cosign.key
-          cosign sign --key cosign.key ${{ env.DOCKERHUB_USERNAME }}/${{ env.IMAGE_NAME }}:sha-${{ github.sha }}
+          # Sign the SHA-specific tag
+          IMAGE_SHA_TAG="${{ env.DOCKERHUB_USERNAME }}/${{ env.IMAGE_NAME }}:sha-${{ github.sha }}"
+          cosign sign --key cosign.key "${IMAGE_SHA_TAG}" -y
+          # If you also want to sign the latest tag
+          IMAGE_LATEST_TAG="${{ env.DOCKERHUB_USERNAME }}/${{ env.IMAGE_NAME }}:latest"
+          cosign sign --key cosign.key "${IMAGE_LATEST_TAG}" -y
+          # Cleanup the key
           rm cosign.key
+      
+      - name: Verify signature
+        run: |
+          # Create a temporary public key file from the private key
+          echo "${{ secrets.COSIGN_PRIVATE_KEY }}" > cosign.key
+          cosign public-key --key cosign.key > cosign.pub
+          
+          # Verify the signature
+          IMAGE_SHA_TAG="${{ env.DOCKERHUB_USERNAME }}/${{ env.IMAGE_NAME }}:sha-${{ github.sha }}"
+          cosign verify --key cosign.pub "${IMAGE_SHA_TAG}"
+          
+          # Cleanup
+          rm cosign.key cosign.pub
       
       - name: Run Trivy vulnerability scanner
         uses: aquasecurity/trivy-action@master
@@ -157,14 +174,6 @@ jobs:
           ignore-unfixed: true
           vuln-type: 'os,library'
           severity: 'CRITICAL,HIGH'
-      
-      - name: Push Docker image to DockerHub
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
       
       - name: Set image tag output
         id: set_output
