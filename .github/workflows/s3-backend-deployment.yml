@@ -1,11 +1,11 @@
 name: S3 Backend Deployment
 
 on:
-  push:
-    branches: [ main ]
-    paths:
-      - 'EKS/backend/**'
-      - '.github/workflows/s3-backend-deployment.yml'
+#  push:
+#    branches: [ main ]
+#    paths:
+#      - 'EKS/backend/**'
+#      - '.github/workflows/s3-backend-deployment.yml'
   workflow_dispatch:
     inputs:
       action:
