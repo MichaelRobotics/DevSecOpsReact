@@ -140,7 +140,7 @@ jobs:
       - name: Sign the image with Cosign
         env:
           COSIGN_PRIVATE_KEY: ${{ secrets.COSIGN_PRIVATE_KEY }}
-          COSIGN_PASSWORD: ""
+          COSIGN_PASSWORD: ${{ secrets.COSIGN_PASSWORD }}
         run: |
           echo "$COSIGN_PRIVATE_KEY" > cosign.key
           # Sign the SHA-specific tag
