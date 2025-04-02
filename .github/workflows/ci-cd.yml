@@ -145,7 +145,8 @@ jobs:
           COSIGN_PASSWORD: ${{ secrets.COSIGN_PASSWORD }}
         run: |
           echo "$COSIGN_PRIVATE_KEY" > cosign.key
-          cosign sign --key cosign.key ${{ env.DOCKERHUB_USERNAME }}/${{ env.IMAGE_NAME }}:sha-${{ github.sha }}          rm cosign.key
+          cosign sign --key cosign.key ${{ env.DOCKERHUB_USERNAME }}/${{ env.IMAGE_NAME }}:sha-${{ github.sha }}
+          rm cosign.key
       
       - name: Run Trivy vulnerability scanner
         uses: aquasecurity/trivy-action@master
