@@ -27,6 +27,7 @@ type: Opaque
 stringData:
   admin.password: "$2a$10$5m.XgRcMrVl7MSrg4KLVi.yZdTIrfoaRGQFEZpJhcXjFMiL3dMPl2"
   admin.passwordMtime: "2023-01-01T00:00:00Z"
+  server.secretkey: "3G8jK9mP2vL5qX7rT4wY1zA8bN6cD0eF2hJ4kM9nO1pQ="
 ---
 apiVersion: v1
 kind: Service
