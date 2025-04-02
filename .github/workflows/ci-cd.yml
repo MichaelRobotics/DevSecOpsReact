@@ -139,13 +139,13 @@ jobs:
           chmod +x cosign-linux-amd64
           sudo mv cosign-linux-amd64 /usr/local/bin/cosign
       
-      - name: Sign the Docker image with Cosign
+      - name: Sign the image
         env:
           COSIGN_PRIVATE_KEY: ${{ secrets.COSIGN_PRIVATE_KEY }}
+          COSIGN_PASSWORD: ${{ secrets.COSIGN_PASSWORD }}
         run: |
           echo "$COSIGN_PRIVATE_KEY" > cosign.key
-          cosign sign --key cosign.key --passphrase-file ${{ secrets.COSIGN_PASSWORD }} ${{ env.DOCKERHUB_USERNAME }}/${{ env.IMAGE_NAME }}:sha-${{ github.sha }}
-          rm cosign.key
+          cosign sign --key cosign.key ${{ env.DOCKERHUB_USERNAME }}/${{ env.IMAGE_NAME }}:sha-${{ github.sha }}          rm cosign.key
       
       - name: Run Trivy vulnerability scanner
         uses: aquasecurity/trivy-action@master
