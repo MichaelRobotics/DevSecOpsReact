@@ -173,6 +173,66 @@ jobs:
           
           echo "Infrastructure destruction completed."
 
+      - name: Terraform Destroy
+        run: terraform apply -auto-approve tfdestroyplan
+        
+      - name: Force IAM Role Cleanup
+        if: always()
+        run: |
+          echo "Cleaning up IAM roles and policies..."
+          # Detach policies from the cluster role
+          ROLE_NAME="DevSecOpsReact-cluster-role"
+          if aws iam get-role --role-name $ROLE_NAME 2>/dev/null; then
+            aws iam list-attached-role-policies --role-name $ROLE_NAME --query 'AttachedPolicies[*].PolicyArn' --output text | 
+            while read -r POLICY_ARN; do
+              echo "Detaching policy $POLICY_ARN from role $ROLE_NAME"
+              aws iam detach-role-policy --role-name $ROLE_NAME --policy-arn $POLICY_ARN
+            done
+            
+            # Wait for policy detachment to propagate
+            echo "Waiting for policy detachments to propagate..."
+            sleep 30
+            
+            # Delete the role after policies are detached
+            echo "Deleting role $ROLE_NAME"
+            aws iam delete-role --role-name $ROLE_NAME || echo "Failed to delete role, may need manual cleanup"
+          fi
+          
+          # Same for node group role
+          NODE_ROLE_NAME="DevSecOpsReact-node-role"
+          if aws iam get-role --role-name $NODE_ROLE_NAME 2>/dev/null; then
+            aws iam list-attached-role-policies --role-name $NODE_ROLE_NAME --query 'AttachedPolicies[*].PolicyArn' --output text | 
+            while read -r POLICY_ARN; do
+              echo "Detaching policy $POLICY_ARN from role $NODE_ROLE_NAME"
+              aws iam detach-role-policy --role-name $NODE_ROLE_NAME --policy-arn $POLICY_ARN
+            done
+            
+            echo "Waiting for policy detachments to propagate..."
+            sleep 30
+            
+            echo "Deleting role $NODE_ROLE_NAME"
+            aws iam delete-role --role-name $NODE_ROLE_NAME || echo "Failed to delete role, may need manual cleanup"
+          fi
+          
+          # Check for and clean up any service-linked roles created for EKS
+          echo "Looking for EKS service-linked roles..."
+          aws iam list-roles --query "Roles[?contains(RoleName, 'AWSServiceRoleForAmazonEKS') || contains(RoleName, 'eksNodeRole')].RoleName" --output text |
+          while read -r SLR_NAME; do
+            if [[ -n "$SLR_NAME" ]]; then
+              echo "Found service-linked role: $SLR_NAME"
+              echo "Checking if we can delete it..."
+              # For service-linked roles, we usually need to wait for the service to delete it
+              # Here we can just provide info that they exist
+              echo "Service-linked role $SLR_NAME may require manual deletion after EKS resources are fully removed"
+            fi
+          done
+
+      - name: Cleanup
+        if: always()
+        run: |
+          echo "Infrastructure destruction process completed."
+          echo "If there were any errors, please check the logs and manually verify resources."
+
   setup-harbor:
     name: Setup Harbor Registry
     needs: terraform-deploy
