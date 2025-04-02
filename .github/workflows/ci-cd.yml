@@ -153,6 +153,8 @@ jobs:
           rm cosign.key
       
       - name: Verify signature
+        env:
+          COSIGN_PASSWORD: ${{ secrets.COSIGN_PASSWORD }}
         run: |
           # Create a temporary public key file from the private key
           echo "${{ secrets.COSIGN_PRIVATE_KEY }}" > cosign.key
