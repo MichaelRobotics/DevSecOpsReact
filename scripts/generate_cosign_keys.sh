@@ -25,7 +25,7 @@ echo "${KEY_PASSWORD}" | cosign generate-key-pair --output-key-prefix "${KEYS_DI
 
 # Display public key
 echo "Cosign public key generated at: ${KEYS_DIR}/cosign_${ENVIRONMENT}.pub"
-echo "This public key will be used by Harbor to verify signed images."
+echo "This public key will be used to verify signed images in your environment."
 
 # Instructions for GitHub Actions setup
 echo "====================================================="

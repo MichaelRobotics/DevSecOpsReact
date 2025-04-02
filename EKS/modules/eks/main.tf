@@ -112,13 +112,13 @@ resource "aws_eks_addon" "ebs_csi_driver" {
   ]
 }
 
-# Create storage class for Harbor
+# Create storage class for general use
 resource "local_file" "storage_class" {
   content = <<-EOT
     apiVersion: storage.k8s.io/v1
     kind: StorageClass
     metadata:
-      name: harbor-storage
+      name: standard-storage
       annotations:
         storageclass.kubernetes.io/is-default-class: "true"
     provisioner: ebs.csi.aws.com
@@ -128,7 +128,7 @@ resource "local_file" "storage_class" {
       encrypted: "true"
     reclaimPolicy: Retain
   EOT
-  filename = "${path.module}/harbor-storage-class.yaml"
+  filename = "${path.module}/standard-storage-class.yaml"
 }
 
 resource "null_resource" "apply_storage_class" {

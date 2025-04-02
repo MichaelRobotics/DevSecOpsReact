@@ -14,18 +14,18 @@ spec:
       labels:
         app: react-app
       annotations:
-        # Add annotation to verify image signatures
+        # Enable signature verification
         cosign.sigstore.dev/verification: "true"
+        # Specify the repository pattern to verify
+        cosign.sigstore.dev/repository-pattern: "robclusterdev/*"
+        # Path to the public key for verification (mounted via ConfigMap)
+        cosign.sigstore.dev/key: "/cosign/cosign.pub"
+        # Fail if signature verification fails
+        cosign.sigstore.dev/verification-strict: "true"
     spec:
-      # Security context for the Pod
-      securityContext:
-        runAsNonRoot: true
-        seccompProfile:
-          type: RuntimeDefault
       containers:
       - name: react-app
-        image: harbor.dev.yourdomain.com/your-project/your-app:latest
-        # Image will be automatically updated by CI/CD pipeline
+        image: robclusterdev/clusterimages:latest
         imagePullPolicy: Always
         ports:
         - containerPort: 80
@@ -36,28 +36,14 @@ spec:
           requests:
             cpu: "0.2"
             memory: "256Mi"
-        # Security context for the container
         securityContext:
           allowPrivilegeEscalation: false
           readOnlyRootFilesystem: true
           runAsNonRoot: true
-          runAsUser: 101  # nginx user
+          runAsUser: 101
           capabilities:
             drop:
             - ALL
-        livenessProbe:
-          httpGet:
-            path: /
-            port: 80
-          initialDelaySeconds: 30
-          periodSeconds: 10
-        readinessProbe:
-          httpGet:
-            path: /
-            port: 80
-          initialDelaySeconds: 5
-          periodSeconds: 5
-        # Add volume mount for nginx to write temp files
         volumeMounts:
         - name: tmp
           mountPath: /tmp
@@ -65,10 +51,12 @@ spec:
           mountPath: /var/cache/nginx
         - name: nginx-run
           mountPath: /var/run
-      # Use Harbor credentials
+        - name: cosign-key
+          mountPath: /cosign
+          readOnly: true
+      # This pulls credentials from the DockerHub secret
       imagePullSecrets:
-      - name: harbor-registry-credentials
-      # Volumes for nginx to write temp files (since we set readOnlyRootFilesystem)
+      - name: dockerhub-credentials
       volumes:
       - name: tmp
         emptyDir: {}
@@ -76,14 +64,6 @@ spec:
         emptyDir: {}
       - name: nginx-run
         emptyDir: {}
----
-# Create a ConfigMap for Harbor registry credentials
-apiVersion: v1
-kind: Secret
-metadata:
-  name: harbor-registry-credentials
-type: kubernetes.io/dockerconfigjson
-data:
-  # This will be replaced with actual credentials in a real deployment
-  # kubectl create secret docker-registry harbor-registry-credentials --docker-server=harbor.dev.yourdomain.com --docker-username=admin --docker-password=password --docker-email=admin@yourdomain.com
-  .dockerconfigjson: eyJhdXRocyI6eyJoYXJib3IuZGV2LnlvdXJkb21haW4uY29tIjp7InVzZXJuYW1lIjoiYWRtaW4iLCJwYXNzd29yZCI6InBhc3N3b3JkIiwiZW1haWwiOiJhZG1pbkB5b3VyZG9tYWluLmNvbSIsImF1dGgiOiJZV1J0YVc0NmNHRnpjM2R2Y21RPSIsImV4cGVyaW1lbnRhbCI6dHJ1ZX19fQ==
+      - name: cosign-key
+        configMap:
+          name: cosign-public-key

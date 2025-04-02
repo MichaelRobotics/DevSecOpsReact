@@ -1,10 +1,10 @@
 name: Infrastructure Deployment
 
 on:
-  push:
-    branches: [ main ]
-    paths:
-      - 'EKS/**'
+#  push:
+#    branches: [ main ]
+#    paths:
+#      - 'EKS/**'
   workflow_dispatch:
     inputs:
       environment:
@@ -22,12 +22,14 @@ on:
         options:
           - deploy
           - destroy
+          - backend-only
+          - infrastructure-only
 
 jobs:
   terraform-backend-init:
     name: Initialize Terraform Backend
     runs-on: ubuntu-latest
-    if: github.event.inputs.action != 'destroy'
+    if: github.event.inputs.action != 'destroy' && github.event.inputs.action != 'infrastructure-only'
     defaults:
       run:
         working-directory: ./EKS/backend
@@ -65,16 +67,111 @@ jobs:
               key            = "terraform.tfstate"
               region         = "us-west-2"
               dynamodb_table = "$(terraform output -raw dynamodb_table)"
-              encrypt        = false
+              encrypt        = true
             }
           }
           EOF
+      
+      - name: Upload Backend Config
+        if: github.event.inputs.action != 'backend-only'
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-config
+          path: ./EKS/backend.tf
+          retention-days: 1
 
   terraform-deploy:
     name: Deploy Infrastructure
     needs: terraform-backend-init
     runs-on: ubuntu-latest
-    if: github.event.inputs.action != 'destroy'
+    if: github.event.inputs.action != 'destroy' && github.event.inputs.action != 'backend-only'
+    defaults:
+      run:
+        working-directory: ./EKS
+    environment: ${{ github.event.inputs.environment || 'dev' }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download Backend Config
+        uses: actions/download-artifact@v4
+        with:
+          name: backend-config
+          path: ./EKS/
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.5.7"
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: 'us-west-2'
+
+      - name: Terraform Plan and Apply
+        id: apply
+        run: |
+          terraform init
+          terraform validate
+          terraform plan -out=tfplan
+          terraform apply -auto-approve tfplan
+
+      - name: Export Kubeconfig
+        id: kubeconfig
+        run: |
+          aws eks update-kubeconfig --region us-west-2 --name $(terraform output -raw cluster_name)
+          echo "KUBECONFIG=$(pwd)/kubeconfig" >> $GITHUB_ENV
+          cp ~/.kube/config $(pwd)/kubeconfig
+
+      - name: Upload Kubeconfig
+        uses: actions/upload-artifact@v4
+        with:
+          name: kubeconfig
+          path: ./EKS/kubeconfig
+          retention-days: 1
+      
+      - name: Install NGINX Ingress
+        run: |
+          # Set up Helm
+          helm repo add ingress-nginx https://kubernetes.github.io/ingress-nginx
+          helm repo update
+          
+          # Install NGINX Ingress
+          helm install nginx-ingress ingress-nginx/ingress-nginx \
+            --namespace ingress-nginx \
+            --create-namespace \
+            --set controller.publishService.enabled=true
+          
+          # Install cert-manager
+          kubectl apply -f https://github.com/cert-manager/cert-manager/releases/download/v1.13.1/cert-manager.yaml
+          sleep 30
+          
+          # Create LetsEncrypt issuer
+          cat > letsencrypt-issuer.yaml << EOF
+          apiVersion: cert-manager.io/v1
+          kind: ClusterIssuer
+          metadata:
+            name: letsencrypt-prod
+          spec:
+            acme:
+              server: https://acme-v02.api.letsencrypt.org/directory
+              email: admin@yourdomain.com
+              privateKeySecretRef:
+                name: letsencrypt-prod
+              solvers:
+              - http01:
+                  ingress:
+                    class: nginx
+          EOF
+          kubectl apply -f letsencrypt-issuer.yaml
+
+  terraform-infrastructure-only:
+    name: Deploy Only Infrastructure (Without Backend)
+    runs-on: ubuntu-latest
+    if: github.event.inputs.action == 'infrastructure-only'
     defaults:
       run:
         working-directory: ./EKS
@@ -116,6 +213,41 @@ jobs:
           name: kubeconfig
           path: ./EKS/kubeconfig
           retention-days: 1
+      
+      - name: Install NGINX Ingress
+        run: |
+          # Set up Helm
+          helm repo add ingress-nginx https://kubernetes.github.io/ingress-nginx
+          helm repo update
+          
+          # Install NGINX Ingress
+          helm install nginx-ingress ingress-nginx/ingress-nginx \
+            --namespace ingress-nginx \
+            --create-namespace \
+            --set controller.publishService.enabled=true
+          
+          # Install cert-manager
+          kubectl apply -f https://github.com/cert-manager/cert-manager/releases/download/v1.13.1/cert-manager.yaml
+          sleep 30
+          
+          # Create LetsEncrypt issuer
+          cat > letsencrypt-issuer.yaml << EOF
+          apiVersion: cert-manager.io/v1
+          kind: ClusterIssuer
+          metadata:
+            name: letsencrypt-prod
+          spec:
+            acme:
+              server: https://acme-v02.api.letsencrypt.org/directory
+              email: admin@yourdomain.com
+              privateKeySecretRef:
+                name: letsencrypt-prod
+              solvers:
+              - http01:
+                  ingress:
+                    class: nginx
+          EOF
+          kubectl apply -f letsencrypt-issuer.yaml
 
   terraform-destroy:
     name: Destroy Infrastructure
@@ -149,242 +281,9 @@ jobs:
           echo "⚠️ DANGER: About to DESTROY infrastructure for environment ${{ github.event.inputs.environment || 'dev' }} ⚠️"
           terraform destroy -auto-approve || true
 
-      - name: Force IAM Role Cleanup
-        if: always()
-        run: |
-          echo "Cleaning up IAM roles and policies..."
-          # Detach policies from the cluster role
-          ROLE_NAME="DevSecOpsReact-cluster-role"
-          if aws iam get-role --role-name $ROLE_NAME 2>/dev/null; then
-            aws iam list-attached-role-policies --role-name $ROLE_NAME --query 'AttachedPolicies[*].PolicyArn' --output text | 
-            while read -r POLICY_ARN; do
-              echo "Detaching policy $POLICY_ARN from role $ROLE_NAME"
-              aws iam detach-role-policy --role-name $ROLE_NAME --policy-arn $POLICY_ARN
-            done
-            
-            # Wait for policy detachment to propagate
-            echo "Waiting for policy detachments to propagate..."
-            sleep 30
-            
-            # Delete the role after policies are detached
-            echo "Deleting role $ROLE_NAME"
-            aws iam delete-role --role-name $ROLE_NAME || echo "Failed to delete role, may need manual cleanup"
-          fi
-          
-          # Same for node group role
-          NODE_ROLE_NAME="DevSecOpsReact-node-role"
-          if aws iam get-role --role-name $NODE_ROLE_NAME 2>/dev/null; then
-            aws iam list-attached-role-policies --role-name $NODE_ROLE_NAME --query 'AttachedPolicies[*].PolicyArn' --output text | 
-            while read -r POLICY_ARN; do
-              echo "Detaching policy $POLICY_ARN from role $NODE_ROLE_NAME"
-              aws iam detach-role-policy --role-name $NODE_ROLE_NAME --policy-arn $POLICY_ARN
-            done
-            
-            echo "Waiting for policy detachments to propagate..."
-            sleep 30
-            
-            echo "Deleting role $NODE_ROLE_NAME"
-            aws iam delete-role --role-name $NODE_ROLE_NAME || echo "Failed to delete role, may need manual cleanup"
-          fi
-          
-          # Check for and clean up any service-linked roles created for EKS
-          echo "Looking for EKS service-linked roles..."
-          aws iam list-roles --query "Roles[?contains(RoleName, 'AWSServiceRoleForAmazonEKS') || contains(RoleName, 'eksNodeRole')].RoleName" --output text |
-          while read -r SLR_NAME; do
-            if [[ -n "$SLR_NAME" ]]; then
-              echo "Found service-linked role: $SLR_NAME"
-              echo "Checking if we can delete it..."
-              # For service-linked roles, we usually need to wait for the service to delete it
-              # Here we can just provide info that they exist
-              echo "Service-linked role $SLR_NAME may require manual deletion after EKS resources are fully removed"
-            fi
-          done
-
       - name: Cleanup
         if: always()
         run: |
           echo "Infrastructure destruction process completed."
           echo "If there were any errors, please check the logs and manually verify resources."
 
-  setup-harbor:
-    name: Setup Harbor Registry
-    needs: terraform-deploy
-    runs-on: ubuntu-latest
-    if: github.event.inputs.action != 'destroy'
-    environment: ${{ github.event.inputs.environment || 'dev' }}
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: 'us-west-2'
-
-      - name: Download Kubeconfig
-        uses: actions/download-artifact@v4
-        with:
-          name: kubeconfig
-          path: ./
-
-      - name: Set KUBECONFIG and Generate Password
-        id: setup
-        run: |
-          echo "KUBECONFIG=$(pwd)/kubeconfig" >> $GITHUB_ENV
-          HARBOR_ADMIN_PASSWORD=$(openssl rand -base64 12)
-          echo "HARBOR_ADMIN_PASSWORD=${HARBOR_ADMIN_PASSWORD}" >> $GITHUB_OUTPUT
-
-      - name: Install Harbor with Helm
-        run: |
-          # Set up Helm
-          helm repo add harbor https://helm.goharbor.io
-          helm repo add ingress-nginx https://kubernetes.github.io/ingress-nginx
-          helm repo update
-          
-          # Create namespace
-          kubectl create namespace harbor --dry-run=client -o yaml | kubectl apply -f -
-          
-          # Install cert-manager
-          kubectl apply -f https://github.com/cert-manager/cert-manager/releases/download/v1.13.1/cert-manager.yaml
-          sleep 30
-          
-          # Create LetsEncrypt issuer
-          cat > letsencrypt-issuer.yaml << EOF
-          apiVersion: cert-manager.io/v1
-          kind: ClusterIssuer
-          metadata:
-            name: letsencrypt-prod
-          spec:
-            acme:
-              server: https://acme-v02.api.letsencrypt.org/directory
-              email: admin@yourdomain.com
-              privateKeySecretRef:
-                name: letsencrypt-prod
-              solvers:
-              - http01:
-                  ingress:
-                    class: nginx
-          EOF
-          kubectl apply -f letsencrypt-issuer.yaml
-          
-          # Install NGINX Ingress
-          helm install nginx-ingress ingress-nginx/ingress-nginx \
-            --namespace ingress-nginx \
-            --create-namespace \
-            --set controller.publishService.enabled=true
-          
-          # Create Harbor values file
-          cat > harbor-values.yaml << EOF
-          expose:
-            type: ingress
-            tls:
-              enabled: true
-              certSource: auto
-            ingress:
-              hosts:
-                core: harbor.${{ github.event.inputs.environment || 'dev' }}.yourdomain.com
-              annotations:
-                kubernetes.io/ingress.class: nginx
-                cert-manager.io/cluster-issuer: letsencrypt-prod
-          externalURL: https://harbor.${{ github.event.inputs.environment || 'dev' }}.yourdomain.com
-          harborAdminPassword: ${{ steps.setup.outputs.HARBOR_ADMIN_PASSWORD }}
-          persistence:
-            enabled: true
-            persistentVolumeClaim:
-              registry:
-                size: 50Gi
-              database:
-                size: 5Gi
-              redis:
-                size: 1Gi
-          database:
-            internal:
-              enabled: true
-              pod:
-                readinessProbe:
-                  tcpSocket:
-                    port: 5432
-                  periodSeconds: 10
-                  failureThreshold: 3
-          EOF
-          
-          # Install Harbor
-          helm install harbor harbor/harbor \
-            --namespace harbor \
-            --values harbor-values.yaml \
-            --timeout 15m
-          
-          # Wait for Harbor to be ready
-          kubectl wait --for=condition=Ready pods --all -n harbor --timeout=300s
-          echo "Harbor has been successfully deployed!"
-
-      - name: Configure Harbor
-        run: |
-          # Install Harbor CLI
-          curl -LO https://github.com/goharbor/harbor-helm/releases/download/v1.11.0/harbor-cli-linux-amd64
-          chmod +x harbor-cli-linux-amd64
-          sudo mv harbor-cli-linux-amd64 /usr/local/bin/harbor
-          
-          # Wait for Harbor API to be ready and create project
-          timeout 300s bash -c 'until curl -k -s https://harbor.${{ github.event.inputs.environment || 'dev' }}.yourdomain.com/api/v2.0/health | grep -q "healthy"; do sleep 5; done'
-          echo "${{ steps.setup.outputs.HARBOR_ADMIN_PASSWORD }}" | harbor login \
-            --username admin \
-            --url https://harbor.${{ github.event.inputs.environment || 'dev' }}.yourdomain.com
-          harbor project create --public your-project
-          
-          # Configure Cosign verification if key exists
-          COSIGN_PUBLIC_KEY="${{ secrets.COSIGN_PUBLIC_KEY_DEV }}"
-          if [ -n "$COSIGN_PUBLIC_KEY" ]; then
-            echo "$COSIGN_PUBLIC_KEY" > cosign.pub
-            PROJECT_ID=$(curl -k -s -X GET \
-              -u "admin:${{ steps.setup.outputs.HARBOR_ADMIN_PASSWORD }}" \
-              "https://harbor.${{ github.event.inputs.environment || 'dev' }}.yourdomain.com/api/v2.0/projects?name=your-project" | jq '.[0].project_id')
-            
-            curl -k -s -X PUT \
-              -u "admin:${{ steps.setup.outputs.HARBOR_ADMIN_PASSWORD }}" \
-              -H "Content-Type: application/json" \
-              -d '{"signature_verification": true, "cosign_verification": true}' \
-              "https://harbor.${{ github.event.inputs.environment || 'dev' }}.yourdomain.com/api/v2.0/projects/${PROJECT_ID}/configurations"
-            
-            curl -k -s -X POST \
-              -u "admin:${{ steps.setup.outputs.HARBOR_ADMIN_PASSWORD }}" \
-              -H "Content-Type: multipart/form-data" \
-              -F "file=@cosign.pub" \
-              "https://harbor.${{ github.event.inputs.environment || 'dev' }}.yourdomain.com/api/v2.0/projects/${PROJECT_ID}/cosign-keys"
-            
-            echo "Cosign signature verification enabled for project your-project"
-            rm cosign.pub
-          else
-            echo "Warning: COSIGN_PUBLIC_KEY_DEV secret not found. Signature verification will not be enabled."
-          fi
-
-      - name: Set GitHub Secrets
-        if: success()
-        run: |
-          if [ -n "${{ secrets.TOKEN }}" ]; then
-            # Using the gliech/create-github-secret-action directly through curl to reduce steps
-            HARBOR_URL="harbor.${{ github.event.inputs.environment || 'dev' }}.yourdomain.com"
-            
-            # Setup secrets for CI/CD
-            gh auth login --with-token <<< "${{ secrets.TOKEN }}"
-            gh secret set HARBOR_URL -b "$HARBOR_URL" 
-            gh secret set HARBOR_USERNAME -b "admin"
-            gh secret set HARBOR_PASSWORD -b "${{ steps.setup.outputs.HARBOR_ADMIN_PASSWORD }}"
-            
-            # Update CI/CD workflow
-            if [ -f ".github/workflows/ci-cd.yml" ]; then
-              sed -i "s/REGISTRY: .*/REGISTRY: $HARBOR_URL/g" .github/workflows/ci-cd.yml
-              sed -i "s/PROJECT: .*/PROJECT: your-project/g" .github/workflows/ci-cd.yml
-              sed -i "s/IMAGE_NAME: .*/IMAGE_NAME: your-app/g" .github/workflows/ci-cd.yml
-              
-              git config user.name "GitHub Actions"
-              git config user.email "actions@github.com"
-              git add .github/workflows/ci-cd.yml
-              git commit -m "Update CI/CD pipeline to use Harbor registry [skip ci]" || echo "No changes to commit"
-              git push
-            fi
-          else
-            echo "TOKEN secret not found. Skipping GitHub secrets and CI/CD update."
-          fi 
