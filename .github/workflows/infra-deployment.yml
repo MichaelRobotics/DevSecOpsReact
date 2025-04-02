@@ -299,6 +299,15 @@ jobs:
                 size: 5Gi
               redis:
                 size: 1Gi
+          database:
+            internal:
+              enabled: true
+              pod:
+                readinessProbe:
+                  tcpSocket:
+                    port: 5432
+                  periodSeconds: 10
+                  failureThreshold: 3
           EOF
           
           # Install Harbor
