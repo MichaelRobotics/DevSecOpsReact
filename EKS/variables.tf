@@ -42,13 +42,24 @@ variable "cluster_version" {
 
 variable "node_groups" {
   description = "EKS node group configuration"
-  type        = map(any)
+  type = map(object({
+    instance_types = list(string)
+    capacity_type  = string
+    scaling_config = object({
+      desired_size = number
+      max_size     = number
+      min_size     = number
+    })
+  }))
   default = {
     main = {
       instance_types = ["t3.medium"]
-      min_size       = 1
-      max_size       = 3
-      desired_size   = 2
+      capacity_type  = "ON_DEMAND"
+      scaling_config = {
+        desired_size = 2
+        max_size     = 3
+        min_size     = 1
+      }
     }
   }
 }
