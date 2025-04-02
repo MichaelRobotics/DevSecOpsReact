@@ -2,7 +2,9 @@
 set -e
 
 # Script to create Kubernetes secret for DockerHub authentication
-# Usage: ./create-dockerhub-secret.sh <your-dockerhub-pat>
+# Usage: 
+# - Interactive: ./create-dockerhub-secret.sh <your-dockerhub-pat>
+# - CI/CD: export DOCKERHUB_USERNAME=username && export DOCKERHUB_TOKEN=token && ./create-dockerhub-secret.sh
 
 # Error handling
 error_exit() {
@@ -21,11 +23,24 @@ if ! kubectl get nodes &> /dev/null; then
 fi
 
 # DockerHub credentials
-DOCKERHUB_USERNAME="robclusterdev"
-DOCKERHUB_EMAIL="admin@example.com"  # You can update this with your actual email
+# Priority: Environment variables > Command-line arguments > Interactive prompt
+if [ -n "$DOCKERHUB_USERNAME" ]; then
+  # Using environment variable
+  echo "Using DockerHub username from environment variable"
+else
+  # Default value
+  DOCKERHUB_USERNAME="robclusterdev"
+fi
 
-# Get PAT from command line argument or prompt for it
-if [ $# -eq 0 ]; then
+# Default email (can be updated)
+DOCKERHUB_EMAIL="admin@example.com"
+
+# Get PAT from environment variable, command line argument, or prompt for it
+if [ -n "$DOCKERHUB_TOKEN" ]; then
+  # Using environment variable
+  DOCKERHUB_PAT="$DOCKERHUB_TOKEN"
+  echo "Using DockerHub token from environment variable"
+elif [ $# -eq 0 ]; then
   echo "Please enter your DockerHub Personal Access Token:"
   read -s DOCKERHUB_PAT
   echo

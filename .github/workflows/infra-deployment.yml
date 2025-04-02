@@ -1,10 +1,12 @@
 name: Infrastructure Deployment
 
 on:
-#  push:
-#    branches: [ main ]
-#    paths:
-#      - 'EKS/**'
+  push:
+    branches: [ main ]
+    paths:
+      - 'EKS/**'
+      - '!EKS/backend/**'
+      - '.github/workflows/infra-deployment.yml'
   workflow_dispatch:
     inputs:
       environment:
@@ -22,69 +24,12 @@ on:
         options:
           - deploy
           - destroy
-          - backend-only
-          - infrastructure-only
 
 jobs:
-  terraform-backend-init:
-    name: Initialize Terraform Backend
-    runs-on: ubuntu-latest
-    if: github.event.inputs.action != 'destroy' && github.event.inputs.action != 'infrastructure-only'
-    defaults:
-      run:
-        working-directory: ./EKS/backend
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v3
-        with:
-          terraform_version: "1.5.7"
-
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: 'us-west-2'
-
-      - name: Terraform Init and Apply Backend
-        id: apply-backend
-        run: |
-          terraform init
-          terraform validate
-          terraform apply -auto-approve
-        
-      - name: Create Backend Config
-        run: |
-          echo "S3_BUCKET=$(terraform output -raw s3_bucket)" >> $GITHUB_OUTPUT
-          echo "DYNAMODB_TABLE=$(terraform output -raw dynamodb_table)" >> $GITHUB_OUTPUT
-          cat > ../backend.tf << EOF
-          terraform {
-            backend "s3" {
-              bucket         = "$(terraform output -raw s3_bucket)"
-              key            = "terraform.tfstate"
-              region         = "us-west-2"
-              dynamodb_table = "$(terraform output -raw dynamodb_table)"
-              encrypt        = true
-            }
-          }
-          EOF
-      
-      - name: Upload Backend Config
-        if: github.event.inputs.action != 'backend-only'
-        uses: actions/upload-artifact@v4
-        with:
-          name: backend-config
-          path: ./EKS/backend.tf
-          retention-days: 1
-
   terraform-deploy:
     name: Deploy Infrastructure
-    needs: terraform-backend-init
     runs-on: ubuntu-latest
-    if: github.event.inputs.action != 'destroy' && github.event.inputs.action != 'backend-only'
+    if: github.event.inputs.action != 'destroy'
     defaults:
       run:
         working-directory: ./EKS
@@ -98,7 +43,7 @@ jobs:
         with:
           name: backend-config
           path: ./EKS/
-
+          
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
         with:
@@ -144,34 +89,11 @@ jobs:
             --namespace ingress-nginx \
             --create-namespace \
             --set controller.publishService.enabled=true
-          
-          # Install cert-manager
-          kubectl apply -f https://github.com/cert-manager/cert-manager/releases/download/v1.13.1/cert-manager.yaml
-          sleep 30
-          
-          # Create LetsEncrypt issuer
-          cat > letsencrypt-issuer.yaml << EOF
-          apiVersion: cert-manager.io/v1
-          kind: ClusterIssuer
-          metadata:
-            name: letsencrypt-prod
-          spec:
-            acme:
-              server: https://acme-v02.api.letsencrypt.org/directory
-              email: admin@yourdomain.com
-              privateKeySecretRef:
-                name: letsencrypt-prod
-              solvers:
-              - http01:
-                  ingress:
-                    class: nginx
-          EOF
-          kubectl apply -f letsencrypt-issuer.yaml
 
-  terraform-infrastructure-only:
-    name: Deploy Only Infrastructure (Without Backend)
+  terraform-destroy:
+    name: Destroy Infrastructure
     runs-on: ubuntu-latest
-    if: github.event.inputs.action == 'infrastructure-only'
+    if: github.event.inputs.action == 'destroy'
     defaults:
       run:
         working-directory: ./EKS
@@ -180,6 +102,12 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: Download Backend Config
+        uses: actions/download-artifact@v4
+        with:
+          name: backend-config
+          path: ./EKS/
+          
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
         with:
@@ -192,98 +120,8 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: 'us-west-2'
 
-      - name: Terraform Plan and Apply
-        id: apply
+      - name: Terraform Destroy
         run: |
           terraform init
-          terraform validate
-          terraform plan -out=tfplan
-          terraform apply -auto-approve tfplan
-
-      - name: Export Kubeconfig
-        id: kubeconfig
-        run: |
-          aws eks update-kubeconfig --region us-west-2 --name $(terraform output -raw cluster_name)
-          echo "KUBECONFIG=$(pwd)/kubeconfig" >> $GITHUB_ENV
-          cp ~/.kube/config $(pwd)/kubeconfig
-
-      - name: Upload Kubeconfig
-        uses: actions/upload-artifact@v4
-        with:
-          name: kubeconfig
-          path: ./EKS/kubeconfig
-          retention-days: 1
-      
-      - name: Install NGINX Ingress
-        run: |
-          # Set up Helm
-          helm repo add ingress-nginx https://kubernetes.github.io/ingress-nginx
-          helm repo update
-          
-          # Install NGINX Ingress
-          helm install nginx-ingress ingress-nginx/ingress-nginx \
-            --namespace ingress-nginx \
-            --create-namespace \
-            --set controller.publishService.enabled=true
-          
-          # Install cert-manager
-          kubectl apply -f https://github.com/cert-manager/cert-manager/releases/download/v1.13.1/cert-manager.yaml
-          sleep 30
-          
-          # Create LetsEncrypt issuer
-          cat > letsencrypt-issuer.yaml << EOF
-          apiVersion: cert-manager.io/v1
-          kind: ClusterIssuer
-          metadata:
-            name: letsencrypt-prod
-          spec:
-            acme:
-              server: https://acme-v02.api.letsencrypt.org/directory
-              email: admin@yourdomain.com
-              privateKeySecretRef:
-                name: letsencrypt-prod
-              solvers:
-              - http01:
-                  ingress:
-                    class: nginx
-          EOF
-          kubectl apply -f letsencrypt-issuer.yaml
-
-  terraform-destroy:
-    name: Destroy Infrastructure
-    runs-on: ubuntu-latest
-    if: github.event_name == 'workflow_dispatch' && github.event.inputs.action == 'destroy'
-    environment: ${{ github.event.inputs.environment || 'dev' }}
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v3
-        with:
-          terraform_version: "1.5.7"
-
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: 'us-west-2'
-
-      - name: Destroy Main Infrastructure
-        working-directory: ./EKS
-        run: |
-          # Simple approach - remove backend.tf if it exists to avoid conflicts
-          [ -f backend.tf ] && rm backend.tf
-          
-          # Initialize and destroy terraform
-          terraform init
-          echo "⚠️ DANGER: About to DESTROY infrastructure for environment ${{ github.event.inputs.environment || 'dev' }} ⚠️"
-          terraform destroy -auto-approve || true
-
-      - name: Cleanup
-        if: always()
-        run: |
-          echo "Infrastructure destruction process completed."
-          echo "If there were any errors, please check the logs and manually verify resources."
+          terraform destroy -auto-approve
 

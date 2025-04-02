@@ -1,0 +1,130 @@
+name: Platform Deployment
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'kubernetes/argocd/**'
+      - 'kubernetes/monitoring/**'
+      - 'scripts/install-argocd.sh'
+      - 'scripts/install-monitoring.sh'
+      - 'scripts/create-dockerhub-secret.sh'
+      - '.github/workflows/platform-deployment.yml'
+  workflow_dispatch:  # Allow manual triggering
+    inputs:
+      cluster_name:
+        description: 'EKS Cluster Name'
+        required: true
+        default: 'DevSecOpsReact'
+      aws_region:
+        description: 'AWS Region'
+        required: true
+        default: 'us-west-2'
+
+env:
+  CLUSTER_NAME: ${{ github.event.inputs.cluster_name || 'DevSecOpsReact' }}
+  AWS_REGION: ${{ github.event.inputs.aws_region || 'us-west-2' }}
+
+jobs:
+  deploy-platform:
+    name: Deploy Platform Components
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+      
+      - name: Setup kubectl
+        uses: azure/setup-kubectl@v3
+        with:
+          version: 'latest'
+      
+      - name: Setup Helm
+        uses: azure/setup-helm@v3
+        with:
+          version: 'latest'
+      
+      - name: Configure kubectl for EKS
+        run: |
+          aws eks update-kubeconfig --region ${{ env.AWS_REGION }} --name ${{ env.CLUSTER_NAME }}
+          kubectl get nodes -o wide  # Verify connectivity
+      
+      - name: Set up Docker Hub Secret
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: |
+          chmod +x ./scripts/create-dockerhub-secret.sh
+          ./scripts/create-dockerhub-secret.sh
+      
+      - name: Deploy ArgoCD
+        run: |
+          chmod +x ./scripts/install-argocd.sh
+          ./scripts/install-argocd.sh
+        
+      - name: Deploy Prometheus and Grafana
+        run: |
+          chmod +x ./scripts/install-monitoring.sh
+          ./scripts/install-monitoring.sh
+      
+      - name: Apply custom resource monitors and dashboards
+        run: |
+          # Apply ServiceMonitor for React App
+          kubectl apply -f kubernetes/monitoring/react-app-service-monitor.yaml
+          
+          # Apply custom Grafana dashboard
+          kubectl apply -f kubernetes/monitoring/react-app-dashboard.yaml
+          
+          # Verify deployments
+          echo "=== Platform Deployments ==="
+          echo "ArgoCD:"
+          kubectl get all -n argocd
+          echo ""
+          echo "Monitoring:"
+          kubectl get all -n monitoring 
+          
+      - name: Display LoadBalancer Access URLs
+        run: |
+          echo "=== LoadBalancer Access URLs ==="
+          echo "Waiting for LoadBalancers to be provisioned (60s)..."
+          sleep 60  # Give more time for AWS to provision the LoadBalancers
+          
+          echo ""
+          echo "✅ ArgoCD UI:"
+          ARGOCD_LB=$(kubectl get svc -n argocd argocd-server -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
+          if [ -n "$ARGOCD_LB" ]; then
+            echo "   🔗 https://$ARGOCD_LB:8443"
+          else
+            echo "   ⚠️ LoadBalancer not yet provisioned. Check status with:"
+            echo "   kubectl get svc -n argocd argocd-server"
+          fi
+          
+          echo ""
+          echo "✅ Grafana:"
+          GRAFANA_LB=$(kubectl get svc -n monitoring prometheus-grafana -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
+          if [ -n "$GRAFANA_LB" ]; then
+            echo "   🔗 http://$GRAFANA_LB"
+          else
+            echo "   ⚠️ LoadBalancer not yet provisioned. Check status with:"
+            echo "   kubectl get svc -n monitoring prometheus-grafana"
+          fi
+          
+          echo ""
+          echo "✅ Prometheus:"
+          PROMETHEUS_LB=$(kubectl get svc -n monitoring prometheus-kube-prometheus-prometheus -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
+          if [ -n "$PROMETHEUS_LB" ]; then
+            echo "   🔗 http://$PROMETHEUS_LB:9090"
+          else
+            echo "   ⚠️ LoadBalancer not yet provisioned. Check status with:"
+            echo "   kubectl get svc -n monitoring prometheus-kube-prometheus-prometheus"
+          fi
+          
+          echo ""
+          echo "If any LoadBalancer URLs are not showing, wait a few minutes and run:"
+          echo "kubectl get svc --all-namespaces | grep LoadBalancer" 

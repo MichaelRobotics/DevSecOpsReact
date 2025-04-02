@@ -1,0 +1,84 @@
+name: S3 Backend Deployment
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'EKS/backend/**'
+      - '.github/workflows/s3-backend-deployment.yml'
+  workflow_dispatch:
+    inputs:
+      action:
+        description: 'Action to perform'
+        required: true
+        default: 'deploy'
+        type: choice
+        options:
+          - deploy
+          - destroy
+
+jobs:
+  terraform-backend:
+    name: Deploy S3 Terraform Backend
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./EKS/backend
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.5.7"
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: 'us-west-2'
+
+      - name: Terraform Init
+        run: terraform init
+
+      - name: Terraform Validate
+        run: terraform validate
+      
+      - name: Terraform Plan
+        run: terraform plan -out=tfplan
+        if: github.event.inputs.action != 'destroy'
+      
+      - name: Terraform Plan Destroy
+        run: terraform plan -destroy -out=tfplan
+        if: github.event.inputs.action == 'destroy'
+
+      - name: Terraform Apply
+        run: terraform apply -auto-approve tfplan
+        
+      - name: Output Backend Configuration
+        if: github.event.inputs.action != 'destroy'
+        run: |
+          echo "S3 bucket: $(terraform output -raw s3_bucket)"
+          echo "DynamoDB table: $(terraform output -raw dynamodb_table)"
+          
+          cat > ../backend.tf << EOF
+          terraform {
+            backend "s3" {
+              bucket         = "$(terraform output -raw s3_bucket)"
+              key            = "terraform.tfstate"
+              region         = "us-west-2"
+              dynamodb_table = "$(terraform output -raw dynamodb_table)"
+              encrypt        = true
+            }
+          }
+          EOF
+          
+      - name: Upload Backend Config as Artifact
+        if: github.event.inputs.action != 'destroy'
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-config
+          path: ./EKS/backend.tf
+          retention-days: 7 
