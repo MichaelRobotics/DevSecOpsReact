@@ -17,8 +17,10 @@ kubectl apply -n argocd -f https://raw.githubusercontent.com/argoproj/argo-cd/st
 kubectl apply -n argocd -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml -l app.kubernetes.io/component=dex-server
 
 # Step 3: Delete the default service and use our custom one with proper ports
+echo "Applying custom ArgoCD server service..."
 kubectl delete -n argocd service argocd-server --ignore-not-found
-kubectl apply -f kubernetes/argocd/install.yaml -l app.kubernetes.io/name=argocd-server
+# Apply the service directly from our install.yaml
+kubectl apply -f kubernetes/argocd/install.yaml -n argocd
 
 # Wait for ArgoCD server to become ready
 echo "Waiting for ArgoCD server to be ready..."
