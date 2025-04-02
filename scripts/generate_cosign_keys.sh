@@ -20,7 +20,7 @@ mkdir -p "${KEYS_DIR}"
 
 # For testing purposes, create a small file with an empty password
 PASSWORD_FILE=$(mktemp)
-echo -n "" > "$PASSWORD_FILE"  # Empty password
+echo -n "test" > "$PASSWORD_FILE"  # Empty password
 
 # Generate cosign keypair with empty password (for testing only)
 echo "Generating Cosign key pair for ${ENVIRONMENT} environment (with empty password)..."
