@@ -143,8 +143,8 @@ jobs:
         run: |
           terraform init
           echo "⚠️ DANGER: About to DESTROY infrastructure for environment ${{ github.event.inputs.environment || 'dev' }} ⚠️"
-          echo "Waiting 10 seconds before proceeding..."
-          sleep 10
+          echo "Waiting 1 seconds before proceeding..."
+          sleep 1
           terraform destroy -auto-approve
 
       - name: Destroy Backend Infrastructure
@@ -155,10 +155,8 @@ jobs:
           DYNAMODB_TABLE="devsecopsreact-dev-terraform-locks"
           
           # Empty S3 bucket first
-          if aws s3api head-bucket --bucket "$S3_BUCKET" 2>/dev/null; then
-            echo "Emptying S3 bucket for terraform state..."
-            aws s3 rm s3://$S3_BUCKET --recursive
-          fi
+          echo "Emptying S3 bucket for terraform state..."
+          aws s3 rm s3://$S3_BUCKET --recursive
           
           # Destroy backend infrastructure
           terraform init
@@ -170,10 +168,8 @@ jobs:
             aws s3 rb s3://$S3_BUCKET --force || true
           fi
           
-          if aws dynamodb describe-table --table-name "$DYNAMODB_TABLE" 2>/dev/null; then
-            echo "Forcing deletion of DynamoDB table..."
-            aws dynamodb delete-table --table-name "$DYNAMODB_TABLE" || true
-          fi
+          echo "Forcing deletion of DynamoDB table..."
+          aws dynamodb delete-table --table-name "$DYNAMODB_TABLE" || true
           
           echo "Infrastructure destruction completed."
 
