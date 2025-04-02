@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cosign-public-key
+  namespace: default
+  labels:
+    app: react-app
+    purpose: image-verification
+data:
+  cosign.pub: |
+    -----BEGIN PUBLIC KEY-----
+    MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEuxkUgjzujlsxT7RdGjdOlG1Hnwbt
+    4Onw16yUXv99clKN/ZgZ3xaMfU1DR89LUgD5HP9gXRnbUyAGDDpm4hz6HA==
+    -----END PUBLIC KEY----- 
