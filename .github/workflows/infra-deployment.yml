@@ -47,96 +47,38 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: 'us-west-2'
 
-      - name: Terraform Init
-        id: init
-        run: terraform init
-
-      - name: Terraform Validate
-        id: validate
-        run: terraform validate
-
-      - name: Terraform Apply Backend
+      - name: Terraform Init and Apply Backend
         id: apply-backend
-        run: terraform apply -auto-approve
+        run: |
+          terraform init
+          terraform validate
+          terraform apply -auto-approve
         
-      - name: Save Backend Output
-        id: backend-output
+      - name: Create Backend Config
         run: |
           echo "S3_BUCKET=$(terraform output -raw s3_bucket)" >> $GITHUB_OUTPUT
           echo "DYNAMODB_TABLE=$(terraform output -raw dynamodb_table)" >> $GITHUB_OUTPUT
-          echo "REGION=$(terraform output -raw region)" >> $GITHUB_OUTPUT
-
-      - name: Create Backend Config
-        run: |
           cat > ../backend.tf << EOF
           terraform {
             backend "s3" {
-              bucket         = "${{ steps.backend-output.outputs.S3_BUCKET }}"
+              bucket         = "$(terraform output -raw s3_bucket)"
               key            = "terraform.tfstate"
-              region         = "${{ steps.backend-output.outputs.REGION }}"
-              dynamodb_table = "${{ steps.backend-output.outputs.DYNAMODB_TABLE }}"
+              region         = "us-west-2"
+              dynamodb_table = "$(terraform output -raw dynamodb_table)"
               encrypt        = false
             }
           }
           EOF
 
-  terraform-plan:
-    name: Terraform Plan
+  terraform-deploy:
+    name: Deploy Infrastructure
     needs: terraform-backend-init
     runs-on: ubuntu-latest
     if: github.event.inputs.action != 'destroy'
     defaults:
       run:
         working-directory: ./EKS
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v3
-        with:
-          terraform_version: "1.5.7"
-
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ vars.AWS_REGION || 'us-west-1' }}
-
-      - name: Terraform Init
-        id: init
-        run: terraform init
-
-      - name: Terraform Validate
-        id: validate
-        run: terraform validate
-
-      - name: Terraform Plan
-        id: plan
-        run: terraform plan -no-color -out=tfplan
-        continue-on-error: true
-
-      - name: Upload Terraform Plan
-        uses: actions/upload-artifact@v4
-        with:
-          name: terraform-plan
-          path: ./EKS/tfplan
-          retention-days: 1
-
-      - name: Check Terraform Plan Status
-        if: steps.plan.outcome == 'failure'
-        run: exit 1
-
-  terraform-destroy-backend:
-    name: Terraform Destroy Backend
-    runs-on: ubuntu-latest
-    needs: terraform-destroy
-    if: github.event_name == 'workflow_dispatch' && github.event.inputs.action == 'destroy'
     environment: ${{ github.event.inputs.environment || 'dev' }}
-    defaults:
-      run:
-        working-directory: ./EKS/backend
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -152,118 +94,19 @@ jobs:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: 'us-west-2'
-          
-      - name: Get Backend Configuration Information
-        id: backend-info
+
+      - name: Terraform Plan and Apply
+        id: apply
         run: |
           terraform init
-          echo "S3_BUCKET=$(terraform output -raw s3_bucket 2>/dev/null || echo '')" >> $GITHUB_OUTPUT
-          echo "DYNAMODB_TABLE=$(terraform output -raw dynamodb_table 2>/dev/null || echo '')" >> $GITHUB_OUTPUT
-      
-      - name: Wait for S3 bucket to empty
-        if: steps.backend-info.outputs.S3_BUCKET != ''
-        run: |
-          echo "Emptying S3 bucket for terraform state..."
-          aws s3 rm s3://${{ steps.backend-info.outputs.S3_BUCKET }} --recursive
-          
-      - name: Terraform Destroy Backend
-        run: |
-          terraform plan -destroy -out=tfdestroyplan
-          echo "⚠️ Destroying Terraform backend infrastructure ⚠️"
-          echo "Waiting 10 seconds before proceeding..."
-          sleep 10
-          terraform apply -auto-approve tfdestroyplan
-
-  terraform-destroy:
-    name: Terraform Destroy
-    runs-on: ubuntu-latest
-    if: github.event_name == 'workflow_dispatch' && github.event.inputs.action == 'destroy'
-    environment: ${{ github.event.inputs.environment || 'dev' }}
-    defaults:
-      run:
-        working-directory: ./EKS
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v3
-        with:
-          terraform_version: "1.5.7"
-
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ vars.AWS_REGION || 'us-west-1' }}
-
-      - name: Terraform Init
-        id: init
-        run: terraform init
-
-      - name: Terraform Destroy Plan
-        id: destroy-plan
-        run: terraform plan -destroy -out=tfdestroyplan
-
-      - name: Confirmation Wait
-        run: |
-          echo "⚠️ DANGER: About to DESTROY infrastructure for environment ${{ github.event.inputs.environment || 'dev' }} ⚠️"
-          echo "Waiting 30 seconds before proceeding with terraform destroy..."
-          sleep 30
-
-      - name: Terraform Destroy
-        run: terraform apply -auto-approve tfdestroyplan
-        
-      - name: Cleanup
-        if: always()
-        run: |
-          echo "Infrastructure destruction process completed."
-          echo "If there were any errors, please check the logs and manually verify resources."
-  
-  terraform-apply:
-    name: Terraform Apply
-    needs: terraform-plan
-    runs-on: ubuntu-latest
-    if: (github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch') && github.event.inputs.action != 'destroy'
-    defaults:
-      run:
-        working-directory: ./EKS
-    environment: ${{ github.event.inputs.environment || 'dev' }}
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v3
-        with:
-          terraform_version: "1.5.7"
-
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ vars.AWS_REGION || 'us-west-1' }}
-
-      - name: Terraform Init
-        id: init
-        run: terraform init
-
-      - name: Download Terraform Plan
-        uses: actions/download-artifact@v4
-        with:
-          name: terraform-plan
-          path: ./EKS/
-
-      - name: Terraform Apply
-        id: apply
-        run: terraform apply -auto-approve tfplan
+          terraform validate
+          terraform plan -out=tfplan
+          terraform apply -auto-approve tfplan
 
       - name: Export Kubeconfig
         id: kubeconfig
         run: |
-          aws eks update-kubeconfig --region $(terraform output -raw region) --name $(terraform output -raw cluster_name)
+          aws eks update-kubeconfig --region us-west-2 --name $(terraform output -raw cluster_name)
           echo "KUBECONFIG=$(pwd)/kubeconfig" >> $GITHUB_ENV
           cp ~/.kube/config $(pwd)/kubeconfig
 
@@ -274,9 +117,69 @@ jobs:
           path: ./EKS/kubeconfig
           retention-days: 1
 
+  terraform-destroy:
+    name: Destroy Infrastructure
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.action == 'destroy'
+    environment: ${{ github.event.inputs.environment || 'dev' }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.5.7"
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: 'us-west-2'
+
+      - name: Destroy Main Infrastructure
+        working-directory: ./EKS
+        run: |
+          terraform init
+          echo "⚠️ DANGER: About to DESTROY infrastructure for environment ${{ github.event.inputs.environment || 'dev' }} ⚠️"
+          echo "Waiting 10 seconds before proceeding..."
+          sleep 10
+          terraform destroy -auto-approve
+
+      - name: Destroy Backend Infrastructure
+        working-directory: ./EKS/backend
+        run: |
+          # Hardcoded values to ensure we can always cleanup
+          S3_BUCKET="devsecopsreact-dev-terraform-state"
+          DYNAMODB_TABLE="devsecopsreact-dev-terraform-locks"
+          
+          # Empty S3 bucket first
+          if aws s3api head-bucket --bucket "$S3_BUCKET" 2>/dev/null; then
+            echo "Emptying S3 bucket for terraform state..."
+            aws s3 rm s3://$S3_BUCKET --recursive
+          fi
+          
+          # Destroy backend infrastructure
+          terraform init
+          terraform destroy -auto-approve || true
+          
+          # Ensure resources are deleted even if Terraform fails
+          if aws s3api head-bucket --bucket "$S3_BUCKET" 2>/dev/null; then
+            echo "Forcing deletion of S3 bucket..."
+            aws s3 rb s3://$S3_BUCKET --force || true
+          fi
+          
+          if aws dynamodb describe-table --table-name "$DYNAMODB_TABLE" 2>/dev/null; then
+            echo "Forcing deletion of DynamoDB table..."
+            aws dynamodb delete-table --table-name "$DYNAMODB_TABLE" || true
+          fi
+          
+          echo "Infrastructure destruction completed."
+
   setup-harbor:
     name: Setup Harbor Registry
-    needs: terraform-apply
+    needs: terraform-deploy
     runs-on: ubuntu-latest
     if: github.event.inputs.action != 'destroy'
     environment: ${{ github.event.inputs.environment || 'dev' }}
@@ -289,7 +192,7 @@ jobs:
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ vars.AWS_REGION || 'us-west-1' }}
+          aws-region: 'us-west-2'
 
       - name: Download Kubeconfig
         uses: actions/download-artifact@v4
@@ -297,70 +200,28 @@ jobs:
           name: kubeconfig
           path: ./
 
-      - name: Set KUBECONFIG environment variable
-        run: echo "KUBECONFIG=$(pwd)/kubeconfig" >> $GITHUB_ENV
-
-      - name: Set up Helm
-        uses: azure/setup-helm@v3
-        with:
-          version: 'v3.13.1'
-
-      - name: Add Harbor Helm Repository
+      - name: Set KUBECONFIG and Generate Password
+        id: setup
         run: |
-          helm repo add harbor https://helm.goharbor.io
-          helm repo update
-
-      - name: Create Namespace
-        run: kubectl create namespace harbor --dry-run=client -o yaml | kubectl apply -f -
-
-      - name: Generate Random Admin Password
-        id: random-password
-        run: |
+          echo "KUBECONFIG=$(pwd)/kubeconfig" >> $GITHUB_ENV
           HARBOR_ADMIN_PASSWORD=$(openssl rand -base64 12)
           echo "HARBOR_ADMIN_PASSWORD=${HARBOR_ADMIN_PASSWORD}" >> $GITHUB_OUTPUT
-          # Store in AWS SSM Parameter Store or another secret store for future reference
-          if [ -n "${{ secrets.STORE_PASSWORDS }}" ]; then
-            aws ssm put-parameter \
-              --name "/harbor/${{ github.event.inputs.environment || 'dev' }}/admin-password" \
-              --value "${HARBOR_ADMIN_PASSWORD}" \
-              --type SecureString \
-              --overwrite
-          fi
 
-      - name: Create Harbor Values File
+      - name: Install Harbor with Helm
         run: |
-          cat > harbor-values.yaml << EOF
-          expose:
-            type: ingress
-            tls:
-              enabled: true
-              certSource: auto
-            ingress:
-              hosts:
-                core: harbor.${{ github.event.inputs.environment || 'dev' }}.yourdomain.com
-              annotations:
-                kubernetes.io/ingress.class: nginx
-                cert-manager.io/cluster-issuer: letsencrypt-prod
-          externalURL: https://harbor.${{ github.event.inputs.environment || 'dev' }}.yourdomain.com
-          harborAdminPassword: ${{ steps.random-password.outputs.HARBOR_ADMIN_PASSWORD }}
-          persistence:
-            enabled: true
-            persistentVolumeClaim:
-              registry:
-                size: 50Gi
-              database:
-                size: 5Gi
-              redis:
-                size: 1Gi
-          EOF
-
-      - name: Install cert-manager for TLS certificates
-        run: |
+          # Set up Helm
+          helm repo add harbor https://helm.goharbor.io
+          helm repo add ingress-nginx https://kubernetes.github.io/ingress-nginx
+          helm repo update
+          
+          # Create namespace
+          kubectl create namespace harbor --dry-run=client -o yaml | kubectl apply -f -
+          
+          # Install cert-manager
           kubectl apply -f https://github.com/cert-manager/cert-manager/releases/download/v1.13.1/cert-manager.yaml
-          sleep 30  # Wait for cert-manager to initialize
-
-      - name: Create LetsEncrypt Issuer
-        run: |
+          sleep 30
+          
+          # Create LetsEncrypt issuer
           cat > letsencrypt-issuer.yaml << EOF
           apiVersion: cert-manager.io/v1
           kind: ClusterIssuer
@@ -378,148 +239,114 @@ jobs:
                     class: nginx
           EOF
           kubectl apply -f letsencrypt-issuer.yaml
-
-      - name: Install NGINX Ingress Controller
-        run: |
-          helm repo add ingress-nginx https://kubernetes.github.io/ingress-nginx
-          helm repo update
+          
+          # Install NGINX Ingress
           helm install nginx-ingress ingress-nginx/ingress-nginx \
             --namespace ingress-nginx \
             --create-namespace \
             --set controller.publishService.enabled=true
-
-      - name: Install Harbor
-        run: |
+          
+          # Create Harbor values file
+          cat > harbor-values.yaml << EOF
+          expose:
+            type: ingress
+            tls:
+              enabled: true
+              certSource: auto
+            ingress:
+              hosts:
+                core: harbor.${{ github.event.inputs.environment || 'dev' }}.yourdomain.com
+              annotations:
+                kubernetes.io/ingress.class: nginx
+                cert-manager.io/cluster-issuer: letsencrypt-prod
+          externalURL: https://harbor.${{ github.event.inputs.environment || 'dev' }}.yourdomain.com
+          harborAdminPassword: ${{ steps.setup.outputs.HARBOR_ADMIN_PASSWORD }}
+          persistence:
+            enabled: true
+            persistentVolumeClaim:
+              registry:
+                size: 50Gi
+              database:
+                size: 5Gi
+              redis:
+                size: 1Gi
+          EOF
+          
+          # Install Harbor
           helm install harbor harbor/harbor \
             --namespace harbor \
             --values harbor-values.yaml \
             --timeout 15m
-
-      - name: Verify Harbor Deployment
-        run: |
-          kubectl get pods -n harbor
-          echo "Waiting for Harbor to be ready..."
+          
+          # Wait for Harbor to be ready
           kubectl wait --for=condition=Ready pods --all -n harbor --timeout=300s
           echo "Harbor has been successfully deployed!"
 
-      - name: Create Harbor Project
+      - name: Configure Harbor
         run: |
           # Install Harbor CLI
           curl -LO https://github.com/goharbor/harbor-helm/releases/download/v1.11.0/harbor-cli-linux-amd64
           chmod +x harbor-cli-linux-amd64
           sudo mv harbor-cli-linux-amd64 /usr/local/bin/harbor
           
-          # Wait for Harbor API to be ready
-          echo "Waiting for Harbor API to be ready..."
+          # Wait for Harbor API to be ready and create project
           timeout 300s bash -c 'until curl -k -s https://harbor.${{ github.event.inputs.environment || 'dev' }}.yourdomain.com/api/v2.0/health | grep -q "healthy"; do sleep 5; done'
-          
-          # Login and create project
-          echo "${{ steps.random-password.outputs.HARBOR_ADMIN_PASSWORD }}" | harbor login \
+          echo "${{ steps.setup.outputs.HARBOR_ADMIN_PASSWORD }}" | harbor login \
             --username admin \
             --url https://harbor.${{ github.event.inputs.environment || 'dev' }}.yourdomain.com
-            
           harbor project create --public your-project
-
-      - name: Configure Harbor Project for Cosign Verification
-        id: configure-cosign
-        run: |
-          # Get Cosign public key directly from the DEV environment secret
+          
+          # Configure Cosign verification if key exists
           COSIGN_PUBLIC_KEY="${{ secrets.COSIGN_PUBLIC_KEY_DEV }}"
-          
-          if [ -z "$COSIGN_PUBLIC_KEY" ]; then
+          if [ -n "$COSIGN_PUBLIC_KEY" ]; then
+            echo "$COSIGN_PUBLIC_KEY" > cosign.pub
+            PROJECT_ID=$(curl -k -s -X GET \
+              -u "admin:${{ steps.setup.outputs.HARBOR_ADMIN_PASSWORD }}" \
+              "https://harbor.${{ github.event.inputs.environment || 'dev' }}.yourdomain.com/api/v2.0/projects?name=your-project" | jq '.[0].project_id')
+            
+            curl -k -s -X PUT \
+              -u "admin:${{ steps.setup.outputs.HARBOR_ADMIN_PASSWORD }}" \
+              -H "Content-Type: application/json" \
+              -d '{"signature_verification": true, "cosign_verification": true}' \
+              "https://harbor.${{ github.event.inputs.environment || 'dev' }}.yourdomain.com/api/v2.0/projects/${PROJECT_ID}/configurations"
+            
+            curl -k -s -X POST \
+              -u "admin:${{ steps.setup.outputs.HARBOR_ADMIN_PASSWORD }}" \
+              -H "Content-Type: multipart/form-data" \
+              -F "file=@cosign.pub" \
+              "https://harbor.${{ github.event.inputs.environment || 'dev' }}.yourdomain.com/api/v2.0/projects/${PROJECT_ID}/cosign-keys"
+            
+            echo "Cosign signature verification enabled for project your-project"
+            rm cosign.pub
+          else
             echo "Warning: COSIGN_PUBLIC_KEY_DEV secret not found. Signature verification will not be enabled."
-            echo "Please run scripts/generate_cosign_keys.sh dev to generate Cosign keys and set up GitHub secrets."
-            exit 0
           fi
-          
-          # Save the public key to a file
-          echo "$COSIGN_PUBLIC_KEY" > cosign.pub
-          
-          # Harbor API doesn't have built-in CLI commands for configuring signature verification
-          # We'll use the Harbor API directly
-          
-          # Get project ID
-          PROJECT_ID=$(curl -k -s -X GET \
-            -u "admin:${{ steps.random-password.outputs.HARBOR_ADMIN_PASSWORD }}" \
-            "https://harbor.${{ github.event.inputs.environment || 'dev' }}.yourdomain.com/api/v2.0/projects?name=your-project" | jq '.[0].project_id')
-          
-          # Enable content trust/signature verification for the project
-          curl -k -s -X PUT \
-            -u "admin:${{ steps.random-password.outputs.HARBOR_ADMIN_PASSWORD }}" \
-            -H "Content-Type: application/json" \
-            -d '{
-              "signature_verification": true,
-              "cosign_verification": true
-            }' \
-            "https://harbor.${{ github.event.inputs.environment || 'dev' }}.yourdomain.com/api/v2.0/projects/${PROJECT_ID}/configurations"
-          
-          # Upload Cosign public key for verification
-          curl -k -s -X POST \
-            -u "admin:${{ steps.random-password.outputs.HARBOR_ADMIN_PASSWORD }}" \
-            -H "Content-Type: multipart/form-data" \
-            -F "file=@cosign.pub" \
-            "https://harbor.${{ github.event.inputs.environment || 'dev' }}.yourdomain.com/api/v2.0/projects/${PROJECT_ID}/cosign-keys"
-          
-          echo "Cosign signature verification enabled for project your-project"
-          # Clean up
-          rm cosign.pub
 
-      - name: Set GitHub Secrets for CI/CD Pipeline
+      - name: Set GitHub Secrets
         if: success()
-        uses: gliech/create-github-secret-action@v1
-        with:
-          name: HARBOR_URL
-          value: harbor.${{ github.event.inputs.environment || 'dev' }}.yourdomain.com
-          pa_token: ${{ secrets.TOKEN }}
-
-      - name: Set GitHub Secrets for Harbor Credentials
-        if: success()
-        uses: gliech/create-github-secret-action@v1
-        with:
-          name: HARBOR_USERNAME
-          value: admin
-          pa_token: ${{ secrets.TOKEN }}
-
-      - name: Set GitHub Secrets for Harbor Password
-        if: success()
-        uses: gliech/create-github-secret-action@v1
-        with:
-          name: HARBOR_PASSWORD
-          value: ${{ steps.random-password.outputs.HARBOR_ADMIN_PASSWORD }}
-          pa_token: ${{ secrets.TOKEN }}
-
-  update-ci-cd:
-    name: Update CI/CD Pipeline Settings
-    needs: setup-harbor
-    runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-        with:
-          token: ${{ secrets.TOKEN }}
-
-      - name: Setup Git config
         run: |
-          git config user.name "GitHub Actions"
-          git config user.email "actions@github.com"
-      
-      - name: Update CI/CD Pipeline with Harbor Settings
-        run: |
-          HARBOR_URL="harbor.${{ github.event.inputs.environment || 'dev' }}.yourdomain.com"
-          PROJECT_NAME="your-project"
-          APP_NAME="your-app"
-          
-          # Update the CI/CD workflow to use Harbor
-          sed -i "s/REGISTRY: .*/REGISTRY: ${HARBOR_URL}/g" .github/workflows/ci-cd.yml
-          sed -i "s/PROJECT: .*/PROJECT: ${PROJECT_NAME}/g" .github/workflows/ci-cd.yml
-          sed -i "s/IMAGE_NAME: .*/IMAGE_NAME: ${APP_NAME}/g" .github/workflows/ci-cd.yml
-          
-          # Verify changes
-          grep -A 5 "REGISTRY:" .github/workflows/ci-cd.yml
-
-      - name: Commit and push changes
-        run: |
-          git add .github/workflows/ci-cd.yml
-          git commit -m "Update CI/CD pipeline to use Harbor registry [skip ci]" || echo "No changes to commit"
-          git push 
+          if [ -n "${{ secrets.TOKEN }}" ]; then
+            # Using the gliech/create-github-secret-action directly through curl to reduce steps
+            HARBOR_URL="harbor.${{ github.event.inputs.environment || 'dev' }}.yourdomain.com"
+            
+            # Setup secrets for CI/CD
+            gh auth login --with-token <<< "${{ secrets.TOKEN }}"
+            gh secret set HARBOR_URL -b "$HARBOR_URL" 
+            gh secret set HARBOR_USERNAME -b "admin"
+            gh secret set HARBOR_PASSWORD -b "${{ steps.setup.outputs.HARBOR_ADMIN_PASSWORD }}"
+            
+            # Update CI/CD workflow
+            if [ -f ".github/workflows/ci-cd.yml" ]; then
+              sed -i "s/REGISTRY: .*/REGISTRY: $HARBOR_URL/g" .github/workflows/ci-cd.yml
+              sed -i "s/PROJECT: .*/PROJECT: your-project/g" .github/workflows/ci-cd.yml
+              sed -i "s/IMAGE_NAME: .*/IMAGE_NAME: your-app/g" .github/workflows/ci-cd.yml
+              
+              git config user.name "GitHub Actions"
+              git config user.email "actions@github.com"
+              git add .github/workflows/ci-cd.yml
+              git commit -m "Update CI/CD pipeline to use Harbor registry [skip ci]" || echo "No changes to commit"
+              git push
+            fi
+          else
+            echo "TOKEN secret not found. Skipping GitHub secrets and CI/CD update."
+          fi 
