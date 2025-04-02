@@ -25,7 +25,7 @@ spec:
     spec:
       containers:
       - name: react-app
-        image: robclusterdev/clusterimages:sha-f058f7c1e5802e915045b3d7d6c66bf8b9692322
+        image: robclusterdev/clusterimages:sha-126cd11d8c4376c55e024adb35182b0205308a04
         imagePullPolicy: Always
         ports:
         - containerPort: 8080
