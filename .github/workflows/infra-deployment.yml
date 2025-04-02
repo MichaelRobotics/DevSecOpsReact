@@ -141,43 +141,13 @@ jobs:
       - name: Destroy Main Infrastructure
         working-directory: ./EKS
         run: |
-          # Ensure backend.tf exists with proper config
-          S3_BUCKET="devsecopsreact-dev-terraform-state"
-          DYNAMODB_TABLE="devsecopsreact-dev-terraform-locks"
+          # Simple approach - remove backend.tf if it exists to avoid conflicts
+          [ -f backend.tf ] && rm backend.tf
           
-          echo "Configuring backend for destruction..."
-          cat > backend.tf << EOF
-          terraform {
-            backend "s3" {
-              bucket         = "${S3_BUCKET}"
-              key            = "terraform.tfstate"
-              region         = "us-west-2"
-              dynamodb_table = "${DYNAMODB_TABLE}"
-              encrypt        = false
-            }
-          }
-          EOF
-          
-          # Initialize and destroy with detailed output
-          echo "Initializing Terraform..."
-          terraform init -reconfigure
-          
+          # Initialize and destroy terraform
+          terraform init
           echo "⚠️ DANGER: About to DESTROY infrastructure for environment ${{ github.event.inputs.environment || 'dev' }} ⚠️"
-          echo "Waiting 1 second before proceeding..."
-          sleep 1
-          
-          # Check if state exists
-          echo "Checking Terraform state..."
-          terraform state list || echo "Warning: State may be empty or corrupted"
-          
-          # Run destroy with detailed output
-          echo "Running Terraform destroy..."
-          terraform destroy -auto-approve || {
-            echo "❌ Initial destroy failed, attempting targeted destroy..."
-            terraform destroy -auto-approve -target=module.eks || true
-            terraform destroy -auto-approve -target=module.vpc || true
-            terraform destroy -auto-approve || echo "❌ Could not fully destroy with Terraform. Manual cleanup will continue."
-          }
+          terraform destroy -auto-approve || true
 
       - name: Destroy Backend Infrastructure
         working-directory: ./EKS/backend
@@ -188,17 +158,15 @@ jobs:
           
           # Empty S3 bucket first
           echo "Emptying S3 bucket for terraform state..."
-          aws s3 rm s3://$S3_BUCKET --recursive
+          aws s3 rm s3://$S3_BUCKET --recursive || true
           
           # Destroy backend infrastructure
           terraform init
           terraform destroy -auto-approve || true
           
           # Ensure resources are deleted even if Terraform fails
-          if aws s3api head-bucket --bucket "$S3_BUCKET" 2>/dev/null; then
-            echo "Forcing deletion of S3 bucket..."
-            aws s3 rb s3://$S3_BUCKET --force || true
-          fi
+          echo "Forcing deletion of S3 bucket..."
+          aws s3 rb s3://$S3_BUCKET --force || true
           
           echo "Forcing deletion of DynamoDB table..."
           aws dynamodb delete-table --table-name "$DYNAMODB_TABLE" || true
