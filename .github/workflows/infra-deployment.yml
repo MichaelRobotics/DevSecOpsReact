@@ -42,7 +42,18 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: backend-config
-          path: ./EKS/
+          path: ./
+          
+      - name: Verify Backend Config
+        run: |
+          if [ -f "backend.tf" ]; then
+            echo "Backend configuration file found"
+            cat backend.tf
+          else
+            echo "ERROR: backend.tf file not found!"
+            ls -la
+            exit 1
+          fi
           
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
@@ -75,7 +86,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: kubeconfig
-          path: ./EKS/kubeconfig
+          path: ./kubeconfig
           retention-days: 1
     
 
@@ -96,6 +107,17 @@ jobs:
         with:
           name: backend-config
           path: ./EKS/
+          
+      - name: Verify Backend Config
+        run: |
+          if [ -f "backend.tf" ]; then
+            echo "Backend configuration file found"
+            cat backend.tf
+          else
+            echo "ERROR: backend.tf file not found!"
+            ls -la
+            exit 1
+          fi
           
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3

@@ -63,6 +63,7 @@ jobs:
           echo "S3 bucket: $(terraform output -raw s3_bucket)"
           echo "DynamoDB table: $(terraform output -raw dynamodb_table)"
           
+          # First create the file in the parent directory as required
           cat > ../backend.tf << EOF
           terraform {
             backend "s3" {
@@ -75,10 +76,13 @@ jobs:
           }
           EOF
           
+          # Copy to the current directory for artifact upload
+          cp ../backend.tf ./backend.tf
+          
       - name: Upload Backend Config as Artifact
         if: github.event.inputs.action != 'destroy'
         uses: actions/upload-artifact@v4
         with:
           name: backend-config
-          path: ../backend.tf
+          path: ./backend.tf
           retention-days: 7 
