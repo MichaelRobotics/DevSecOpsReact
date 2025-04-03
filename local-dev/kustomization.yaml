@@ -15,9 +15,9 @@ commonLabels:
   app.kubernetes.io/managed-by: kustomize
   environment: local-dev
 
-namespace: app
+namespace: default
 
 # Configure image for local development
-images:
-- name: ghcr.io/michaelrobotics/devsecopsreact  # Match image name in deployment.yaml
-  newTag: latest 
+#images:
+#- name: ghcr.io/michaelrobotics/devsecopsreact  # Match image name in deployment.yaml
+#  newTag: latest 
