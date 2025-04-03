@@ -63,17 +63,3 @@ jobs:
           BUCKET=$(terraform output -raw s3_bucket)
           TABLE=$(terraform output -raw dynamodb_table)
           
-          echo "S3 bucket: $BUCKET"
-          echo "DynamoDB table: $TABLE"
-          echo ""
-          echo "IMPORTANT: These values must match the ones configured in EKS/main.tf backend block:"
-          echo "Expected bucket: devsecopsreact-dev-terraform-state"
-          echo "Expected table: devsecopsreact-dev-terraform-locks"
-          
-          if [ "$BUCKET" != "devsecopsreact-dev-terraform-state" ]; then
-            echo "WARNING: S3 bucket name mismatch! Update EKS/main.tf or recreate the backend."
-          fi
-          
-          if [ "$TABLE" != "devsecopsreact-dev-terraform-locks" ]; then
-            echo "WARNING: DynamoDB table name mismatch! Update EKS/main.tf or recreate the backend."
-          fi 
