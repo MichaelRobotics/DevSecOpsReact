@@ -1,18 +1,22 @@
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
-  name: react-app
+  name: devsecopsreact
   namespace: argocd
 spec:
   project: default
   source:
-    repoURL: https://github.com/your-org/your-repo.git  # Replace with your app repo
+    repoURL: https://github.com/MichaelRobotics/DevSecOpsReact.git  # Update this with your actual repository URL
     targetRevision: main
-    path: kubernetes/react-app  # Path to your app manifests
+    path: kubernetes
+    directory:
+      exclude: "{argocd/**,monitoring/**}"  # Exclude argocd and monitoring directories
   destination:
     server: https://kubernetes.default.svc
-    namespace: default
+    namespace: app
   syncPolicy:
     automated:
       prune: true
       selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
