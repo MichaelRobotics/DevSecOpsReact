@@ -3,20 +3,19 @@ kind: Namespace
 metadata:
   name: argocd
 ---
+# This is a minimal ArgoCD installation manifest
+# For production, consider a full installation following the official documentation
 apiVersion: v1
 kind: ServiceAccount
 metadata:
-  name: argocd-server
+  name: argocd-application-controller
   namespace: argocd
 ---
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: argocd-cm
+  name: argocd-cmd-params-cm
   namespace: argocd
-data:
-  admin.enabled: "true"
-  url: "http://argocd-server.argocd.svc:8080"  # Internal, no TLS
 ---
 apiVersion: v1
 kind: Secret
@@ -25,9 +24,9 @@ metadata:
   namespace: argocd
 type: Opaque
 stringData:
+  # Default password is 'admin' - change this in production
   admin.password: "$2a$10$5m.XgRcMrVl7MSrg4KLVi.yZdTIrfoaRGQFEZpJhcXjFMiL3dMPl2"
   admin.passwordMtime: "2023-01-01T00:00:00Z"
-  server.secretkey: "3G8jK9mP2vL5qX7rT4wY1zA8bN6cD0eF2hJ4kM9nO1pQ="
 ---
 apiVersion: v1
 kind: Service
@@ -38,6 +37,10 @@ spec:
   ports:
   - name: http
     port: 8080
+    protocol: TCP
+    targetPort: 8080
+  - name: https
+    port: 8443
     protocol: TCP
     targetPort: 8080
   selector:
@@ -59,13 +62,12 @@ spec:
       labels:
         app.kubernetes.io/name: argocd-server
     spec:
-      serviceAccountName: argocd-server  # Explicitly set
       containers:
       - name: argocd-server
         image: quay.io/argoproj/argocd:v2.9.3
         args:
         - argocd-server
-        - --insecure  # No TLS
+        - --insecure
         ports:
         - containerPort: 8080
         securityContext:
@@ -76,29 +78,4 @@ spec:
             path: /healthz
             port: 8080
           initialDelaySeconds: 3
-          periodSeconds: 30
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRole
-metadata:
-  name: argocd-server-role
-rules:
-- apiGroups: [""]
-  resources: ["configmaps", "secrets"]
-  verbs: ["get", "list", "watch"]
-- apiGroups: ["argoproj.io"]
-  resources: ["appprojects", "applications"]
-  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRoleBinding
-metadata:
-  name: argocd-server-binding
-subjects:
-- kind: ServiceAccount
-  name: argocd-server
-  namespace: argocd
-roleRef:
-  kind: ClusterRole
-  name: argocd-server-role
-  apiGroup: rbac.authorization.k8s.io
+          periodSeconds: 30 

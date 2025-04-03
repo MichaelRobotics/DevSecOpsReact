@@ -2,14 +2,14 @@ name: Platform Deployment
 
 on:
   push:
-    branches: [ main ]
-    paths:
-      - 'kubernetes/argocd/**'
-      - 'kubernetes/monitoring/**'
-      - 'scripts/install-argocd.sh'
-      - 'scripts/install-monitoring.sh'
-      - 'scripts/create-dockerhub-secret.sh'
-      - '.github/workflows/platform-deployment.yml'
+#    branches: [ main ]
+#    paths:
+#      - 'kubernetes/argocd/**'
+#      - 'kubernetes/monitoring/**'
+#      - 'scripts/install-argocd.sh'
+#      - 'scripts/install-monitoring.sh'
+#      - 'scripts/create-dockerhub-secret.sh'
+#      - '.github/workflows/platform-deployment.yml'
   workflow_dispatch:  # Allow manual triggering
     inputs:
       cluster_name:

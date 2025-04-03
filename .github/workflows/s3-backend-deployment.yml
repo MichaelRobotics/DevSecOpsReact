@@ -80,5 +80,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: backend-config
-          path: ./EKS/backend.tf
+          path: ../backend.tf
           retention-days: 7 
