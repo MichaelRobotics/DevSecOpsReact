@@ -64,7 +64,7 @@ jobs:
           helmfile sync
           kubectl wait --for=condition=available --timeout=300s deployment/argocd-server -n argocd
           kubectl wait --for=condition=available --timeout=300s deployment/monitoring-grafana -n monitoring
-          kubectl wait --for=condition=available --timeout=300s deployment/monitoring-kube-prometheus-prometheus -n monitoring
+          kubectl wait --for=condition=available --timeout=300s deployment/monitoring-monitoring-kube-prometheus-prometheus -n monitoring
           echo "ArgoCD admin password: $(kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath='{.data.password}' | base64 -d)"
       
       - name: Display LoadBalancer Access URLs
@@ -75,5 +75,5 @@ jobs:
           echo "✅ ArgoCD UI: https://$ARGOCD_LB:8443"
           GRAFANA_LB=$(kubectl get svc -n monitoring monitoring-grafana -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
           echo "✅ Grafana: http://$GRAFANA_LB"
-          PROMETHEUS_LB=$(kubectl get svc -n monitoring monitoring-kube-prometheus-prometheus -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
+          PROMETHEUS_LB=$(kubectl get svc -n monitoring monitoring-monitoring-kube-prometheus-prometheus -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
           echo "✅ Prometheus: http://$PROMETHEUS_LB:9090"

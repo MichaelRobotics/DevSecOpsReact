@@ -1,11 +1,11 @@
 name: Application Deployment
 
 on:
-  push:
-    branches: [ main ]
-    paths:
-      - 'kubernetes/argocd/applications/**'
-      - 'kubernetes/monitoring/**'
+#  push:
+#    branches: [ main ]
+#    paths:
+#      - 'kubernetes/argocd/applications/**'
+#      - 'kubernetes/monitoring/**'
   workflow_dispatch:
     inputs:
       cluster_name:
