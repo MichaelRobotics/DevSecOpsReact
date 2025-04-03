@@ -74,5 +74,5 @@ jobs:
           echo "✅ ArgoCD UI: https://$ARGOCD_LB:8443"
           GRAFANA_LB=$(kubectl get svc -n monitoring monitoring-grafana -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
           echo "✅ Grafana: http://$GRAFANA_LB"
-          PROMETHEUS_LB=$(kubectl get svc -n monitoring statefulset/prometheus-monitoring-kube-prometheus-prometheus -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
+          PROMETHEUS_LB=$(kubectl get svc -n monitoring prometheus-monitoring-kube-prometheus-prometheus -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
           echo "✅ Prometheus: http://$PROMETHEUS_LB:9090"
