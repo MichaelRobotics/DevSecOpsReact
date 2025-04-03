@@ -1,0 +1,23 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Include all the main application resources
+resources:
+  - ../kubernetes/deployment.yaml
+  - ../kubernetes/service.yaml
+  - ../kubernetes/ingress.yaml
+  - ../kubernetes/cosign-public-key-configmap.yaml
+  - ../kubernetes/monitoring/base  # Include monitoring resources
+
+# Optional: Add common labels to all resources
+commonLabels:
+  app.kubernetes.io/part-of: devsecopsreact
+  app.kubernetes.io/managed-by: kustomize
+  environment: local-dev
+
+namespace: app
+
+# Configure image for local development
+images:
+- name: ghcr.io/michaelrobotics/devsecopsreact  # Match image name in deployment.yaml
+  newTag: latest 

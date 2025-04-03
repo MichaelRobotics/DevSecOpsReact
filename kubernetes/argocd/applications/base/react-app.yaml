@@ -10,11 +10,13 @@ spec:
     targetRevision: main
     path: kubernetes
     directory:
-      exclude: "{argocd/**,monitoring/**, kustomization.yaml}"  # Exclude argocd and monitoring directories
+      exclude: "{argocd/**,monitoring/**}"  # Exclude argocd and monitoring directories
   destination:
     server: https://kubernetes.default.svc
-    namespace: default
+    namespace: app
   syncPolicy:
     automated:
       prune: true
       selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
