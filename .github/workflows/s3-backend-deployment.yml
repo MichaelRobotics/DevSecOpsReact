@@ -57,32 +57,23 @@ jobs:
       - name: Terraform Apply
         run: terraform apply -auto-approve tfplan
         
-      - name: Output Backend Configuration
+      - name: Display Backend Information
         if: github.event.inputs.action != 'destroy'
         run: |
-          echo "S3 bucket: $(terraform output -raw s3_bucket)"
-          echo "DynamoDB table: $(terraform output -raw dynamodb_table)"
+          BUCKET=$(terraform output -raw s3_bucket)
+          TABLE=$(terraform output -raw dynamodb_table)
           
-          # First create the file in the parent directory as required
-          cat > ../backend.tf << EOF
-          terraform {
-            backend "s3" {
-              bucket         = "$(terraform output -raw s3_bucket)"
-              key            = "terraform.tfstate"
-              region         = "us-west-2"
-              dynamodb_table = "$(terraform output -raw dynamodb_table)"
-              encrypt        = true
-            }
-          }
-          EOF
+          echo "S3 bucket: $BUCKET"
+          echo "DynamoDB table: $TABLE"
+          echo ""
+          echo "IMPORTANT: These values must match the ones configured in EKS/main.tf backend block:"
+          echo "Expected bucket: devsecopsreact-dev-terraform-state"
+          echo "Expected table: devsecopsreact-dev-terraform-locks"
           
-          # Copy to the current directory for artifact upload
-          cp ../backend.tf ./backend.tf
+          if [ "$BUCKET" != "devsecopsreact-dev-terraform-state" ]; then
+            echo "WARNING: S3 bucket name mismatch! Update EKS/main.tf or recreate the backend."
+          fi
           
-      - name: Upload Backend Config as Artifact
-        if: github.event.inputs.action != 'destroy'
-        uses: actions/upload-artifact@v4
-        with:
-          name: backend-config
-          path: ./backend.tf
-          retention-days: 7 
+          if [ "$TABLE" != "devsecopsreact-dev-terraform-locks" ]; then
+            echo "WARNING: DynamoDB table name mismatch! Update EKS/main.tf or recreate the backend."
+          fi 

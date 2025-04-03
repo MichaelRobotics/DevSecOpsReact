@@ -38,23 +38,6 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Download Backend Config
-        uses: actions/download-artifact@v4
-        with:
-          name: backend-config
-          path: ./
-          
-      - name: Verify Backend Config
-        run: |
-          if [ -f "backend.tf" ]; then
-            echo "Backend configuration file found"
-            cat backend.tf
-          else
-            echo "ERROR: backend.tf file not found!"
-            ls -la
-            exit 1
-          fi
-          
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
         with:
@@ -102,23 +85,6 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Download Backend Config
-        uses: actions/download-artifact@v4
-        with:
-          name: backend-config
-          path: ./EKS/
-          
-      - name: Verify Backend Config
-        run: |
-          if [ -f "backend.tf" ]; then
-            echo "Backend configuration file found"
-            cat backend.tf
-          else
-            echo "ERROR: backend.tf file not found!"
-            ls -la
-            exit 1
-          fi
-          
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
         with:
