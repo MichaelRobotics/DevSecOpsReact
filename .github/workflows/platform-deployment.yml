@@ -1,16 +1,11 @@
 name: Platform Deployment
 
 on:
-  push:
+#  push:
 #    branches: [ main ]
 #    paths:
-#      - 'kubernetes/argocd/**'
-#      - 'kubernetes/monitoring/**'
-#      - 'scripts/install-argocd.sh'
-#      - 'scripts/install-monitoring.sh'
-#      - 'scripts/create-dockerhub-secret.sh'
-#      - '.github/workflows/platform-deployment.yml'
-  workflow_dispatch:  # Allow manual triggering
+#      - 'helmfile.yaml'
+  workflow_dispatch:
     inputs:
       cluster_name:
         description: 'EKS Cluster Name'
@@ -42,18 +37,19 @@ jobs:
       
       - name: Setup kubectl
         uses: azure/setup-kubectl@v3
-        with:
-          version: 'latest'
       
       - name: Setup Helm
         uses: azure/setup-helm@v3
-        with:
-          version: 'latest'
+      
+      - name: Install Helmfile
+        run: |
+          curl -L https://github.com/helmfile/helmfile/releases/download/v0.167.1/helmfile_0.167.1_linux_amd64.tar.gz | tar xz
+          sudo mv helmfile /usr/local/bin/
       
       - name: Configure kubectl for EKS
         run: |
           aws eks update-kubeconfig --region ${{ env.AWS_REGION }} --name ${{ env.CLUSTER_NAME }}
-          kubectl get nodes -o wide  # Verify connectivity
+          kubectl get nodes -o wide
       
       - name: Set up Docker Hub Secret
         env:
@@ -63,68 +59,21 @@ jobs:
           chmod +x ./scripts/create-dockerhub-secret.sh
           ./scripts/create-dockerhub-secret.sh
       
-      - name: Deploy ArgoCD
+      - name: Deploy Platform Components with Helmfile
         run: |
-          chmod +x ./scripts/install-argocd.sh
-          ./scripts/install-argocd.sh
-        
-      - name: Deploy Prometheus and Grafana
-        run: |
-          chmod +x ./scripts/install-monitoring.sh
-          ./scripts/install-monitoring.sh
+          helmfile sync
+          kubectl wait --for=condition=available --timeout=300s deployment/argocd-server -n argocd
+          kubectl wait --for=condition=available --timeout=300s deployment/monitoring-grafana -n monitoring
+          kubectl wait --for=condition=available --timeout=300s deployment/monitoring-kube-prometheus-prometheus -n monitoring
+          echo "ArgoCD admin password: $(kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath='{.data.password}' | base64 -d)"
       
-      - name: Apply custom resource monitors and dashboards
-        run: |
-          # Apply ServiceMonitor for React App
-          kubectl apply -f kubernetes/monitoring/react-app-service-monitor.yaml
-          
-          # Apply custom Grafana dashboard
-          kubectl apply -f kubernetes/monitoring/react-app-dashboard.yaml
-          
-          # Verify deployments
-          echo "=== Platform Deployments ==="
-          echo "ArgoCD:"
-          kubectl get all -n argocd
-          echo ""
-          echo "Monitoring:"
-          kubectl get all -n monitoring 
-          
       - name: Display LoadBalancer Access URLs
         run: |
           echo "=== LoadBalancer Access URLs ==="
-          echo "Waiting for LoadBalancers to be provisioned (60s)..."
-          sleep 60  # Give more time for AWS to provision the LoadBalancers
-          
-          echo ""
-          echo "✅ ArgoCD UI:"
+          sleep 60
           ARGOCD_LB=$(kubectl get svc -n argocd argocd-server -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
-          if [ -n "$ARGOCD_LB" ]; then
-            echo "   🔗 https://$ARGOCD_LB:8443"
-          else
-            echo "   ⚠️ LoadBalancer not yet provisioned. Check status with:"
-            echo "   kubectl get svc -n argocd argocd-server"
-          fi
-          
-          echo ""
-          echo "✅ Grafana:"
-          GRAFANA_LB=$(kubectl get svc -n monitoring prometheus-grafana -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
-          if [ -n "$GRAFANA_LB" ]; then
-            echo "   🔗 http://$GRAFANA_LB"
-          else
-            echo "   ⚠️ LoadBalancer not yet provisioned. Check status with:"
-            echo "   kubectl get svc -n monitoring prometheus-grafana"
-          fi
-          
-          echo ""
-          echo "✅ Prometheus:"
-          PROMETHEUS_LB=$(kubectl get svc -n monitoring prometheus-kube-prometheus-prometheus -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
-          if [ -n "$PROMETHEUS_LB" ]; then
-            echo "   🔗 http://$PROMETHEUS_LB:9090"
-          else
-            echo "   ⚠️ LoadBalancer not yet provisioned. Check status with:"
-            echo "   kubectl get svc -n monitoring prometheus-kube-prometheus-prometheus"
-          fi
-          
-          echo ""
-          echo "If any LoadBalancer URLs are not showing, wait a few minutes and run:"
-          echo "kubectl get svc --all-namespaces | grep LoadBalancer" 
+          echo "✅ ArgoCD UI: https://$ARGOCD_LB:8443"
+          GRAFANA_LB=$(kubectl get svc -n monitoring monitoring-grafana -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
+          echo "✅ Grafana: http://$GRAFANA_LB"
+          PROMETHEUS_LB=$(kubectl get svc -n monitoring monitoring-kube-prometheus-prometheus -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
+          echo "✅ Prometheus: http://$PROMETHEUS_LB:9090"

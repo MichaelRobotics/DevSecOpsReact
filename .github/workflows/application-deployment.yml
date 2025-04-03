@@ -1,0 +1,65 @@
+name: Application Deployment
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'kubernetes/argocd/applications/**'
+      - 'kubernetes/monitoring/**'
+  workflow_dispatch:
+    inputs:
+      cluster_name:
+        description: 'EKS Cluster Name'
+        required: true
+        default: 'DevSecOpsReact'
+      aws_region:
+        description: 'AWS Region'
+        required: true
+        default: 'us-west-2'
+
+env:
+  CLUSTER_NAME: ${{ github.event.inputs.cluster_name || 'DevSecOpsReact' }}
+  AWS_REGION: ${{ github.event.inputs.aws_region || 'us-west-2' }}
+
+jobs:
+  deploy-applications:
+    name: Deploy ArgoCD Applications and Customizations
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+      
+      - name: Setup kubectl
+        uses: azure/setup-kubectl@v3
+      
+      - name: Configure kubectl for EKS
+        run: |
+          aws eks update-kubeconfig --region ${{ env.AWS_REGION }} --name ${{ env.CLUSTER_NAME }}
+          kubectl get nodes -o wide
+      
+      - name: Deploy ArgoCD Applications
+        run: |
+          kubectl apply -k kubernetes/argocd/applications/base/
+          echo "Waiting for ArgoCD to sync applications..."
+          sleep 30  # Adjust based on sync time
+          kubectl get applications -n argocd
+      
+      - name: Deploy Monitoring Customizations
+        run: |
+          kubectl apply -k kubernetes/monitoring/base/
+          kubectl get servicemonitor -n monitoring
+          kubectl get configmap -n monitoring -l grafana_dashboard
+      
+      - name: Verify Deployment
+        run: |
+          echo "=== Application Status ==="
+          kubectl get applications -n argocd -o wide
+          echo "=== Monitoring Customizations ==="
+          kubectl get all -n monitoring

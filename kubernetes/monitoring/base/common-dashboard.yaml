@@ -1,0 +1,23 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: common-dashboard
+  namespace: monitoring
+  labels:
+    grafana_dashboard: "1"
+data:
+  common-dashboard.json: |-
+    {
+      "title": "Cluster Overview",
+      "panels": [
+        {
+          "title": "CPU Usage",
+          "type": "graph",
+          "targets": [
+            {
+              "expr": "rate(node_cpu_seconds_total{mode='user'}[5m])"
+            }
+          ]
+        }
+      ]
+    }

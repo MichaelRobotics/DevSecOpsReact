@@ -6,12 +6,9 @@ metadata:
 spec:
   project: default
   source:
-    repoURL: https://github.com/robclusterdev/DevSecOpsReact.git  # Update with your actual repository
+    repoURL: https://github.com/your-org/your-repo.git  # Replace with your app repo
     targetRevision: main
-    path: kubernetes
-    directory:
-      recurse: true
-      exclude: "argocd/*,monitoring/*"
+    path: kubernetes/react-app  # Path to your app manifests
   destination:
     server: https://kubernetes.default.svc
     namespace: default
@@ -19,5 +16,3 @@ spec:
     automated:
       prune: true
       selfHeal: true
-    syncOptions:
-    - CreateNamespace=true 

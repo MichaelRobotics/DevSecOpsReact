@@ -1,0 +1,37 @@
+repositories:
+  - name: argo
+    url: https://argoproj.github.io/argo-helm
+  - name: prometheus-community
+    url: https://prometheus-community.github.io/helm-charts
+
+releases:
+  - name: argocd
+    namespace: argocd
+    chart: argo/argo-cd
+    version: 5.51.6  # Adjust to latest in April 2025
+    values:
+      - server:
+          service:
+            type: LoadBalancer
+            servicePortHttps: 8443
+          extraArgs:
+            - --insecure  # Optional
+      - configs:
+          secret:
+            createSecret: true
+  - name: monitoring
+    namespace: monitoring
+    chart: prometheus-community/kube-prometheus-stack
+    version: 58.2.2  # Adjust to latest in April 2025
+    values:
+      - prometheus:
+          prometheusSpec:
+            serviceMonitorSelectorNilUsesHelmValues: false
+          service:
+            type: LoadBalancer
+            port: 9090
+        grafana:
+          service:
+            type: LoadBalancer
+            port: 80
+          adminPassword: "admin123"  # Use a secret in production
